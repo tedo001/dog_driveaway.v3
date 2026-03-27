@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Model weights (large files)
+export/*.pt
+export/*.onnx
+!export/export_models.py
+
+# Dataset (downloaded separately)
+data/dataset/
+data/crops/
+data/youtube_frames/
+
+# Logs
+logs/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Training runs
+runs/
