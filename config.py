@@ -1,6 +1,11 @@
 """
 config.py — Central configuration for Smart Dog Threat Detection System.
 All settings in one place. Override via .env where noted.
+
+MODES:
+  - simulation : Visual simulation with animated dogs/humans (no camera needed)
+  - live       : Real webcam + laptop speaker ultrasonic
+  - hardware   : Real webcam + Arduino + external ultrasonic sensor
 """
 
 import os
@@ -8,6 +13,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── System Mode ──────────────────────────────────────────────────────────────
+# "simulation" | "live" | "hardware"
+SYSTEM_MODE = os.getenv("SYSTEM_MODE", "simulation")
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
@@ -81,12 +90,35 @@ CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_FPS = 30
 
+# ── Simulation Settings ─────────────────────────────────────────────────────
+SIM_WIDTH = 800
+SIM_HEIGHT = 600
+SIM_FPS = 30
+SIM_DOG_SPEED = 3.0          # pixels per frame base speed
+SIM_HUMAN_SPEED = 1.5        # pixels per frame
+SIM_APPROACH_DISTANCE = 120  # pixels — dog within this = ALERT
+SIM_ATTACK_DISTANCE = 50     # pixels — dog within this = DANGER
+SIM_DOG_FIGHT_DISTANCE = 60  # pixels — dog-to-dog within this = DOG_FIGHT
+
+# ── Arduino / Hardware Settings ──────────────────────────────────────────────
+ARDUINO_PORT = os.getenv("ARDUINO_PORT", "COM3")  # Windows COM port
+ARDUINO_BAUD = 9600
+ARDUINO_TIMEOUT = 1.0  # seconds
+# Commands sent to Arduino over serial:
+ARDUINO_CMD_TRIGGER = "ULTRASONIC_ON"
+ARDUINO_CMD_STOP = "ULTRASONIC_OFF"
+ARDUINO_CMD_STATUS = "STATUS"
+
 # ── Safety Rules (hardcoded — NEVER bypass) ──────────────────────────────────
-# Rule 1: DOG_FIGHT → NEVER trigger ultrasonic
-# Rule 2: No humans in frame → NEVER classify DANGER
-# Rule 3: Only DANGER + humans present → trigger ultrasonic
-# Rule 4: Audio scream detected → always escalate to DANGER
-# Rule 5: Audio growl + visual ALERT → upgrade to DANGER
+# CORE OBJECTIVE:
+#   - Aggressive dog ALONE       → NEVER emit ultrasonic
+#   - Aggressive dog + HUMAN     → EMIT ultrasonic
+#
+# Rule 1: DOG_FIGHT (dog vs dog) → NEVER trigger ultrasonic
+# Rule 2: No humans in frame     → NEVER trigger ultrasonic (even if DANGER)
+# Rule 3: DANGER + humans nearby → TRIGGER ultrasonic
+# Rule 4: Audio scream detected  → escalate to DANGER
+# Rule 5: Audio growl + ALERT    → upgrade to DANGER
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 LOG_EVENTS = True
