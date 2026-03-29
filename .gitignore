@@ -1,38 +1,118 @@
+# ══════════════════════════════════════════════════════
+# SECURITY — NEVER commit these
+# ══════════════════════════════════════════════════════
+.env
+.env.local
+.env.production
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+credentials.json
+secrets.json
+service_account.json
+token.json
+
+# API keys / secrets that may leak
+**/api_key*
+**/secret*
+**/*credentials*
+**/*token*.json
+
+# ══════════════════════════════════════════════════════
 # Python
+# ══════════════════════════════════════════════════════
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
 dist/
 build/
 *.egg
+*.so
+*.whl
+pip-log.txt
 
 # Virtual environment
 venv/
 .venv/
 env/
+ENV/
 
-# IDE
+# ══════════════════════════════════════════════════════
+# IDE / Editor
+# ══════════════════════════════════════════════════════
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
 
-# Model weights (large files)
+# ══════════════════════════════════════════════════════
+# Model weights (large binary files — download separately)
+# ══════════════════════════════════════════════════════
 export/*.pt
 export/*.onnx
+export/*.tflite
+export/*.engine
 !export/export_models.py
 
-# Dataset (downloaded separately)
+# Pretrained base models
+*.pt
+!models/*.py
+yolov8*.pt
+
+# ══════════════════════════════════════════════════════
+# Dataset (large — download via scripts, never commit)
+# ══════════════════════════════════════════════════════
 data/dataset/
 data/crops/
 data/youtube_frames/
+data/raw_images/
+data/*.zip
+data/*.tar.gz
 
+# ══════════════════════════════════════════════════════
+# Training outputs
+# ══════════════════════════════════════════════════════
+runs/
+wandb/
+mlruns/
+lightning_logs/
+checkpoints/
+*.ckpt
+
+# ══════════════════════════════════════════════════════
 # Logs
+# ══════════════════════════════════════════════════════
 logs/*.csv
+logs/*.log
+*.log
 
-# OS
+# ══════════════════════════════════════════════════════
+# OS junk
+# ══════════════════════════════════════════════════════
 .DS_Store
 Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
-# Training runs
-runs/
+# ══════════════════════════════════════════════════════
+# Temporary / cache
+# ══════════════════════════════════════════════════════
+*.tmp
+*.bak
+*.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
