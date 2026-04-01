@@ -1,6 +1,6 @@
 """
 train/train_yolo.py — Fine-tune YOLOv8n on dog behaviour dataset.
-Optimized for RTX 4060 Laptop GPU (8GB VRAM).
+Auto-detects GPU/CPU and adjusts settings accordingly.
 """
 
 import sys
@@ -15,6 +15,7 @@ from config import (
     YOLO_BATCH,
     YOLO_IMGSZ,
     YOLO_DEVICE,
+    DEVICE_NAME,
     DATASET_DIR,
     EXPORT_DIR,
 )
@@ -22,12 +23,13 @@ from config import (
 
 def train_yolo():
     """Fine-tune YOLOv8n on the dog behaviour dataset."""
-    # Find data.yaml
     data_yaml = DATASET_DIR / "data.yaml"
     if not data_yaml.exists():
         print(f"ERROR: data.yaml not found at {data_yaml}")
         print("Run 'python data/download_dataset.py' first")
         sys.exit(1)
+
+    is_cpu = YOLO_DEVICE == "cpu"
 
     print("=" * 60)
     print("  YOLO Training — Dog Detector")
@@ -37,13 +39,18 @@ def train_yolo():
     print(f"  Epochs     : {YOLO_EPOCHS}")
     print(f"  Batch size : {YOLO_BATCH}")
     print(f"  Image size : {YOLO_IMGSZ}")
-    print(f"  Device     : cuda:{YOLO_DEVICE}")
+    print(f"  Device     : {DEVICE_NAME} ({'CPU' if is_cpu else 'GPU'})")
+    if is_cpu:
+        print()
+        print("  NOTE: Training on CPU — this will be slow (~5-15 hours)")
+        print("  Reduce epochs with: YOLO_EPOCHS in config.py")
     print("=" * 60)
 
-    # Load base model
     model = YOLO(YOLO_BASE_MODEL)
 
-    # Train
+    # Adjust settings for CPU vs GPU
+    workers = 2 if is_cpu else 4
+
     results = model.train(
         data=str(data_yaml),
         epochs=YOLO_EPOCHS,
@@ -64,13 +71,12 @@ def train_yolo():
         warmup_epochs=3,
         warmup_momentum=0.8,
         close_mosaic=10,
-        amp=True,  # Mixed precision for RTX 4060
-        workers=4,
+        amp=not is_cpu,  # Mixed precision only on GPU
+        workers=workers,
         seed=42,
         verbose=True,
     )
 
-    # Copy best model to export directory
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     best_path = Path(results.save_dir) / "weights" / "best.pt"
     if best_path.exists():

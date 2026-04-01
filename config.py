@@ -43,14 +43,23 @@ ROBOFLOW_VERSION = int(os.getenv("ROBOFLOW_VERSION", "8"))
 DATASET_DIR = DATA_DIR / "dataset"
 CROPS_DIR = DATA_DIR / "crops"
 
+# ── Device Auto-Detection ────────────────────────────────────────────────────
+import torch as _torch
+if _torch.cuda.is_available():
+    DEVICE = "0"                   # CUDA GPU
+    DEVICE_NAME = _torch.cuda.get_device_name(0)
+else:
+    DEVICE = "cpu"                 # CPU fallback
+    DEVICE_NAME = "CPU"
+
 # ── YOLO Settings ────────────────────────────────────────────────────────────
 YOLO_BASE_MODEL = "yolov8n.pt"
-YOLO_IMGSZ = 640
+YOLO_IMGSZ = 640 if DEVICE != "cpu" else 416   # smaller on CPU = faster
 YOLO_EPOCHS = 100
-YOLO_BATCH = 16
+YOLO_BATCH = 16 if DEVICE != "cpu" else 4      # small batch for CPU RAM
 YOLO_CONF_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD = 0.45
-YOLO_DEVICE = "0"  # CUDA GPU 0 (RTX 4060)
+YOLO_DEVICE = DEVICE
 
 # ── SSD (Single Shot Detector) Settings ──────────────────────────────────────
 SSD_IMGSZ = 300                # SSD300 fixed input size
@@ -58,7 +67,7 @@ SSD_NUM_CLASSES = 3            # 0=background, 1=dog, 2=person
 SSD_CLASS_NAMES = ["__background__", "dog", "person"]
 SSD_CONF_THRESHOLD = 0.5
 SSD_NMS_THRESHOLD = 0.45
-SSD_BATCH_SIZE = 8             # smaller than YOLO (SSD uses more VRAM)
+SSD_BATCH_SIZE = 4 if DEVICE == "cpu" else 8
 SSD_EPOCHS = 80
 SSD_LR = 0.005                 # SGD learning rate
 SSD_PATIENCE = 12              # early stopping patience
@@ -66,7 +75,7 @@ SSD_PATIENCE = 12              # early stopping patience
 # ── CNN (BehaviorNet) Settings ───────────────────────────────────────────────
 CNN_INPUT_SIZE = 128
 CNN_NUM_CLASSES = 4
-CNN_BATCH_SIZE = 32
+CNN_BATCH_SIZE = 16 if DEVICE == "cpu" else 32
 CNN_EPOCHS = 60
 CNN_LR = 0.001
 CNN_PATIENCE = 10  # early stopping patience

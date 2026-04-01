@@ -87,19 +87,25 @@ def train_cnn():
     print(f"  Validation samples : {len(val_dataset)}")
     print(f"  Classes found      : {train_dataset.classes}")
 
+    is_cpu = not torch.cuda.is_available()
+    num_workers = 2 if is_cpu else 4
+
+    if is_cpu:
+        print(f"\n  NOTE: Training on CPU — ~1-3 hours")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=CNN_BATCH_SIZE,
         shuffle=True,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=not is_cpu,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=CNN_BATCH_SIZE,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=not is_cpu,
     )
 
     # Model

@@ -78,20 +78,28 @@ def train_ssd():
     train_dataset = SSDDogDataset(train_images, train_labels, augment=True)
     val_dataset = SSDDogDataset(val_images, val_labels, augment=False)
 
+    is_cpu = not torch.cuda.is_available()
+    num_workers = 2 if is_cpu else 4
+
+    if is_cpu:
+        print()
+        print("  NOTE: Training on CPU — this will be slow (~8-20 hours)")
+        print("  Reduce epochs in config.py to speed up")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=SSD_BATCH_SIZE,
         shuffle=True,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=not is_cpu,
         collate_fn=ssd_collate_fn,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=SSD_BATCH_SIZE,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=not is_cpu,
         collate_fn=ssd_collate_fn,
     )
 
