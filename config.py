@@ -37,7 +37,7 @@ SSD_MODEL_PATH = EXPORT_DIR / "ssd_dog_detector.pt"
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "")
-ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "dog-behaviour-1")
+ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "durgamanis-workspace-on48g")
 ROBOFLOW_PROJECT = os.getenv("ROBOFLOW_PROJECT", "dog-behaviour-1")
 ROBOFLOW_VERSION = int(os.getenv("ROBOFLOW_VERSION", "8"))
 DATASET_DIR = DATA_DIR / "dataset"
