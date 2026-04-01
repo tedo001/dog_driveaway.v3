@@ -18,6 +18,10 @@ load_dotenv()
 # "simulation" | "live" | "hardware"
 SYSTEM_MODE = os.getenv("SYSTEM_MODE", "simulation")
 
+# ── Detector Backend ─────────────────────────────────────────────────────────
+# "yolo" | "ssd"  — which object detector to use in live/hardware mode
+DETECTOR_BACKEND = os.getenv("DETECTOR_BACKEND", "yolo")
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -29,6 +33,7 @@ YOLO_MODEL_PATH = EXPORT_DIR / "dog_detector.pt"
 CNN_MODEL_PATH = EXPORT_DIR / "behavior_net.pt"
 CNN_SCRIPTED_PATH = EXPORT_DIR / "behavior_net_scripted.pt"
 YOLO_ONNX_PATH = EXPORT_DIR / "dog_detector.onnx"
+SSD_MODEL_PATH = EXPORT_DIR / "ssd_dog_detector.pt"
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "")
@@ -46,6 +51,17 @@ YOLO_BATCH = 16
 YOLO_CONF_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD = 0.45
 YOLO_DEVICE = "0"  # CUDA GPU 0 (RTX 4060)
+
+# ── SSD (Single Shot Detector) Settings ──────────────────────────────────────
+SSD_IMGSZ = 300                # SSD300 fixed input size
+SSD_NUM_CLASSES = 3            # 0=background, 1=dog, 2=person
+SSD_CLASS_NAMES = ["__background__", "dog", "person"]
+SSD_CONF_THRESHOLD = 0.5
+SSD_NMS_THRESHOLD = 0.45
+SSD_BATCH_SIZE = 8             # smaller than YOLO (SSD uses more VRAM)
+SSD_EPOCHS = 80
+SSD_LR = 0.005                 # SGD learning rate
+SSD_PATIENCE = 12              # early stopping patience
 
 # ── CNN (BehaviorNet) Settings ───────────────────────────────────────────────
 CNN_INPUT_SIZE = 128

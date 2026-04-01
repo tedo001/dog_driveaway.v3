@@ -6,11 +6,15 @@ Three modes (set SYSTEM_MODE in .env or config.py):
   live       : Real webcam + laptop speaker ultrasonic
   hardware   : Real webcam + Arduino + external ultrasonic sensor
 
+Two detector backends (set DETECTOR_BACKEND in .env or --detector flag):
+  yolo : YOLOv8n — faster, anchor-free, grid-based
+  ssd  : SSD300-VGG16 — anchor-based, multi-scale feature maps
+
 Usage:
-  python main.py                  → uses SYSTEM_MODE from config
-  python main.py --mode simulation
-  python main.py --mode live
-  python main.py --mode hardware
+  python main.py                              → simulation mode
+  python main.py --mode live                  → live with YOLO
+  python main.py --mode live --detector ssd   → live with SSD
+  python main.py --mode hardware --detector ssd
 """
 
 import sys
@@ -20,11 +24,23 @@ import cv2
 
 from config import (
     SYSTEM_MODE,
+    DETECTOR_BACKEND,
     CAMERA_INDEX,
     CAMERA_WIDTH,
     CAMERA_HEIGHT,
-    WINDOW_NAME,
 )
+
+
+def load_detector(backend):
+    """Load the selected detector backend (YOLO or SSD)."""
+    if backend == "ssd":
+        from models.ssd_model import SSDDetector
+        print("[INIT] Loading SSD300-VGG16 detector...")
+        return SSDDetector()
+    else:
+        from models.yolo_model import DualYOLODetector
+        print("[INIT] Loading YOLOv8 detector...")
+        return DualYOLODetector()
 
 
 def run_simulation():
@@ -33,9 +49,8 @@ def run_simulation():
     sim_run()
 
 
-def run_live():
-    """Live mode: webcam + YOLO + CNN + laptop speaker ultrasonic."""
-    from models.yolo_model import DualYOLODetector
+def run_live(detector_backend):
+    """Live mode: webcam + detector + CNN + laptop speaker ultrasonic."""
     from models.cnn_model import BehaviorClassifier
     from models.threat_engine import ThreatEngine
     from audio.audio_detector import AudioDetector
@@ -46,11 +61,12 @@ def run_live():
 
     print("=" * 60)
     print("  LIVE MODE — Smart Dog Threat Detection System")
+    print(f"  Detector: {detector_backend.upper()}")
     print("=" * 60)
     print()
 
-    print("[INIT] Loading models...")
-    yolo = DualYOLODetector()
+    detector = load_detector(detector_backend)
+    print("[INIT] Loading BehaviorNet CNN...")
     cnn = BehaviorClassifier()
     engine = ThreatEngine()
 
@@ -86,13 +102,13 @@ def run_live():
                 time.sleep(0.1)
                 continue
 
-            detections = yolo.detect(frame)
+            detections = detector.detect(frame)
             num_dogs = sum(1 for d in detections if d["class"] == "dog")
             num_humans = sum(1 for d in detections if d["class"] == "person")
 
             cnn_results = []
             if num_dogs > 0:
-                dog_crops = yolo.get_dog_crops(frame, detections)
+                dog_crops = detector.get_dog_crops(frame, detections)
                 for crop, bbox in dog_crops:
                     cnn_results.append(cnn.classify(crop))
 
@@ -126,7 +142,7 @@ def run_live():
                 audio_growl=audio_state.get("growl", False),
                 audio_scream=audio_state.get("scream", False),
                 ultrasonic_triggered=ultrasonic_fired,
-                notes=result["reason"],
+                notes=f"[{detector_backend.upper()}] {result['reason']}",
             )
 
             key = ui.show(frame)
@@ -143,9 +159,8 @@ def run_live():
         print("[LIVE] Done!")
 
 
-def run_hardware():
-    """Hardware mode: webcam + YOLO + CNN + Arduino ultrasonic sensor."""
-    from models.yolo_model import DualYOLODetector
+def run_hardware(detector_backend):
+    """Hardware mode: webcam + detector + CNN + Arduino ultrasonic sensor."""
     from models.cnn_model import BehaviorClassifier
     from models.threat_engine import ThreatEngine
     from audio.audio_detector import AudioDetector
@@ -156,11 +171,12 @@ def run_hardware():
 
     print("=" * 60)
     print("  HARDWARE MODE — Arduino + Ultrasonic Sensor")
+    print(f"  Detector: {detector_backend.upper()}")
     print("=" * 60)
     print()
 
-    print("[INIT] Loading models...")
-    yolo = DualYOLODetector()
+    detector = load_detector(detector_backend)
+    print("[INIT] Loading BehaviorNet CNN...")
     cnn = BehaviorClassifier()
     engine = ThreatEngine()
 
@@ -197,13 +213,13 @@ def run_hardware():
                 time.sleep(0.1)
                 continue
 
-            detections = yolo.detect(frame)
+            detections = detector.detect(frame)
             num_dogs = sum(1 for d in detections if d["class"] == "dog")
             num_humans = sum(1 for d in detections if d["class"] == "person")
 
             cnn_results = []
             if num_dogs > 0:
-                dog_crops = yolo.get_dog_crops(frame, detections)
+                dog_crops = detector.get_dog_crops(frame, detections)
                 for crop, bbox in dog_crops:
                     cnn_results.append(cnn.classify(crop))
 
@@ -218,7 +234,6 @@ def run_hardware():
                 audio_state=audio_state,
             )
 
-            # Hardware ultrasonic trigger (Arduino)
             ultrasonic_fired = False
             if result["trigger_ultrasonic"]:
                 ultrasonic_fired = ultrasonic.trigger()
@@ -238,7 +253,7 @@ def run_hardware():
                 audio_growl=audio_state.get("growl", False),
                 audio_scream=audio_state.get("scream", False),
                 ultrasonic_triggered=ultrasonic_fired,
-                notes=f"[HW] {result['reason']}",
+                notes=f"[HW-{detector_backend.upper()}] {result['reason']}",
             )
 
             key = ui.show(frame)
@@ -264,13 +279,21 @@ def main():
         default=SYSTEM_MODE,
         help="Run mode: simulation (default), live (webcam+speaker), hardware (webcam+Arduino)",
     )
+    parser.add_argument(
+        "--detector",
+        choices=["yolo", "ssd"],
+        default=DETECTOR_BACKEND,
+        help="Detector backend: yolo (default) or ssd",
+    )
     args = parser.parse_args()
 
     mode = args.mode.lower()
+    detector = args.detector.lower()
 
     print()
     print("  ===== SMART DOG THREAT DETECTION SYSTEM =====")
-    print(f"  Mode: {mode.upper()}")
+    print(f"  Mode     : {mode.upper()}")
+    print(f"  Detector : {detector.upper()}")
     print()
     print("  CORE OBJECTIVE:")
     print("    Aggressive dog ALONE       → NO ultrasonic")
@@ -281,9 +304,9 @@ def main():
     if mode == "simulation":
         run_simulation()
     elif mode == "live":
-        run_live()
+        run_live(detector)
     elif mode == "hardware":
-        run_hardware()
+        run_hardware(detector)
     else:
         print(f"Unknown mode: {mode}")
         sys.exit(1)
