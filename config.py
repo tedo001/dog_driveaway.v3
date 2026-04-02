@@ -55,7 +55,7 @@ else:
 # ── YOLO Settings ────────────────────────────────────────────────────────────
 YOLO_BASE_MODEL = "yolov8n.pt"
 YOLO_IMGSZ = 640 if DEVICE != "cpu" else 416   # smaller on CPU = faster
-YOLO_EPOCHS = 100
+YOLO_EPOCHS = 60
 YOLO_BATCH = 16 if DEVICE != "cpu" else 4      # small batch for CPU RAM
 YOLO_CONF_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD = 0.45
@@ -68,7 +68,7 @@ SSD_CLASS_NAMES = ["__background__", "dog", "person"]
 SSD_CONF_THRESHOLD = 0.5
 SSD_NMS_THRESHOLD = 0.45
 SSD_BATCH_SIZE = 4 if DEVICE == "cpu" else 8
-SSD_EPOCHS = 80
+SSD_EPOCHS = 60
 SSD_LR = 0.005                 # SGD learning rate
 SSD_PATIENCE = 12              # early stopping patience
 

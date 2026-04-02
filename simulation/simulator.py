@@ -1,6 +1,6 @@
 """
 simulation/simulator.py — Full visual simulation of dog threat detection.
-Animates dogs and humans on a 2D canvas. No camera, no models needed.
+Animates dogs and humans on a 2D canvas. No camera, no models needed.q
 Tests the complete threat logic pipeline with controllable scenarios.
 
 Controls:
