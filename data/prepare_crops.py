@@ -83,7 +83,7 @@ def prepare_crops():
             h, w = frame.shape[:2]
             frame_area = h * w
 
-            # Run YOLO detection
+            # qqqqqRun YOLO detection
             results = model.predict(source=frame, conf=0.3, verbose=False)
 
             for result in results:
