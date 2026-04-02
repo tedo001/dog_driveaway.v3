@@ -48,15 +48,17 @@ import torch as _torch
 if _torch.cuda.is_available():
     DEVICE = "0"                   # CUDA GPU
     DEVICE_NAME = _torch.cuda.get_device_name(0)
+    DEVICE_VRAM_GB = round(_torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
 else:
     DEVICE = "cpu"                 # CPU fallback
     DEVICE_NAME = "CPU"
+    DEVICE_VRAM_GB = 0
 
 # ── YOLO Settings ────────────────────────────────────────────────────────────
 YOLO_BASE_MODEL = "yolov8n.pt"
 YOLO_IMGSZ = 640 if DEVICE != "cpu" else 416   # smaller on CPU = faster
 YOLO_EPOCHS = 60
-YOLO_BATCH = 16 if DEVICE != "cpu" else 4      # small batch for CPU RAM
+YOLO_BATCH = 16 if DEVICE != "cpu" else 4      # GPU: 16, CPU: 4
 YOLO_CONF_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD = 0.45
 YOLO_DEVICE = DEVICE
@@ -67,7 +69,7 @@ SSD_NUM_CLASSES = 3            # 0=background, 1=dog, 2=person
 SSD_CLASS_NAMES = ["__background__", "dog", "person"]
 SSD_CONF_THRESHOLD = 0.5
 SSD_NMS_THRESHOLD = 0.45
-SSD_BATCH_SIZE = 4 if DEVICE == "cpu" else 8
+SSD_BATCH_SIZE = 4 if DEVICE == "cpu" else 16   # GPU: 16, CPU: 4
 SSD_EPOCHS = 60
 SSD_LR = 0.005                 # SGD learning rate
 SSD_PATIENCE = 12              # early stopping patience
@@ -75,10 +77,14 @@ SSD_PATIENCE = 12              # early stopping patience
 # ── CNN (BehaviorNet) Settings ───────────────────────────────────────────────
 CNN_INPUT_SIZE = 128
 CNN_NUM_CLASSES = 4
-CNN_BATCH_SIZE = 16 if DEVICE == "cpu" else 32
+CNN_BATCH_SIZE = 16 if DEVICE == "cpu" else 64  # GPU: 64, CPU: 16
 CNN_EPOCHS = 60
 CNN_LR = 0.001
 CNN_PATIENCE = 10  # early stopping patience
+
+# ── MLOps Pipeline Settings ─────────────────────────────────────────────────
+MLOPS_STATE_FILE = BASE_DIR / "mlops" / "pipeline_state.json"
+MLOPS_DEFAULT_EPOCHS = 60
 
 # ── Threat Classes ───────────────────────────────────────────────────────────
 THREAT_CLASSES = {
