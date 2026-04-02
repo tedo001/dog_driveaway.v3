@@ -27,7 +27,6 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 EXPORT_DIR = BASE_DIR / "export"
 LOG_DIR = BASE_DIR / "logs"
-TRAIN_DIR = BASE_DIR / "train"
 
 YOLO_MODEL_PATH = EXPORT_DIR / "dog_detector.pt"
 CNN_MODEL_PATH = EXPORT_DIR / "behavior_net.pt"

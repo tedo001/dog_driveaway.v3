@@ -186,7 +186,7 @@ def train_ssd(epochs=None, batch=None, lr=None):
     import torch
     import torch.optim as optim
     from models.ssd_model import SSDDogDetector
-    from data.ssd_dataset import SSDDogDataset, ssd_collate_fn
+    from models.ssd_dataset import SSDDogDataset, ssd_collate_fn
     from torch.utils.data import DataLoader
 
     epochs = epochs or SSD_EPOCHS

@@ -1,5 +1,5 @@
 """
-data/ssd_dataset.py — PyTorch Dataset for SSD training.
+models/ssd_dataset.py — PyTorch Dataset for SSD training.
 Converts YOLO-format labels (class cx cy w h) to SSD-format
 (absolute x1 y1 x2 y2 boxes + integer labels).
 

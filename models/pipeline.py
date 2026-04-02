@@ -68,11 +68,10 @@ class DetectionPipeline:
     Single call to process() runs the entire pipeline on one frame.
     """
 
-    def __init__(self, detector_mode=None, use_v2_cnn=True):
+    def __init__(self, detector_mode=None):
         """
         Args:
             detector_mode: "yolo", "ssd", or "ensemble"
-            use_v2_cnn: Use BehaviorNetV2 (True) or V1 (False)
         """
         mode = detector_mode or DETECTOR_BACKEND
 
@@ -91,20 +90,16 @@ class DetectionPipeline:
         from models.spatial_analyzer import SpatialAnalyzer
         self.spatial = SpatialAnalyzer()
 
-        # Stage 3: Behavior classifier
-        if use_v2_cnn:
-            from models.behavior_net_v2 import BehaviorClassifierV2
-            self.cnn = BehaviorClassifierV2()
-        else:
-            from models.cnn_model import BehaviorClassifier
-            self.cnn = BehaviorClassifier()
+        # Stage 3: Behavior classifier (BehaviorNetV2)
+        from models.behavior_net_v2 import BehaviorClassifierV2
+        self.cnn = BehaviorClassifierV2()
 
         # Stage 5: Threat engine
         from models.threat_engine import ThreatEngine
         self.engine = ThreatEngine()
 
         self.detector_mode = mode
-        print(f"[PIPELINE] Ready — detector={mode}, cnn={'v2' if use_v2_cnn else 'v1'}")
+        print(f"[PIPELINE] Ready — detector={mode}")
 
     def process(self, frame, audio_state):
         """

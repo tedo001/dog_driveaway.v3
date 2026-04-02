@@ -152,17 +152,8 @@ class BehaviorClassifierV2:
             state_dict = torch.load(str(model_file), map_location=self.torch_device, weights_only=True)
             self.model.load_state_dict(state_dict)
         else:
-            # Fallback to v1
-            from config import CNN_MODEL_PATH
-            if CNN_MODEL_PATH.exists():
-                print(f"[CNN-V2] V2 not found, loading V1: {CNN_MODEL_PATH}")
-                from models.cnn_model import BehaviorClassifier
-                self._fallback = BehaviorClassifier()
-                self._use_fallback = True
-                return
             print(f"[CNN-V2] No trained model found — using random weights")
-
-        self._use_fallback = False
+            print(f"[CNN-V2] Train with: python app.py --train cnn")
         self.model.to(self.torch_device)
         self.model.eval()
         total_params = sum(p.numel() for p in self.model.parameters())
@@ -177,9 +168,6 @@ class BehaviorClassifierV2:
         return tensor.to(self.torch_device)
 
     def classify(self, crop):
-        if hasattr(self, '_use_fallback') and self._use_fallback:
-            return self._fallback.classify(crop)
-
         tensor = self.preprocess(crop)
         with torch.no_grad():
             output = self.model(tensor)
@@ -192,9 +180,6 @@ class BehaviorClassifierV2:
         return threat_class, threat_label, confidence
 
     def classify_batch(self, crops):
-        if hasattr(self, '_use_fallback') and self._use_fallback:
-            return [self._fallback.classify(c) for c in crops]
-
         if not crops:
             return []
 

@@ -22,6 +22,7 @@ Usage:
 
 import sys
 import os
+import time
 import subprocess
 import importlib
 from pathlib import Path
@@ -233,7 +234,348 @@ def prompt_menu(options, prompt_text="Choose"):
         print(f"    Invalid. Enter 0-{len(options)}")
 
 
-# ── Run Detection ──────────────────────────────────────────────────────────
+# ── Detection Functions ────────────────────────────────────────────────────
+
+def _load_detector(backend):
+    """Load the selected detector backend."""
+    if backend == "ensemble":
+        from models.ensemble_detector import EnsembleDetector
+        print("[INIT] Loading ENSEMBLE detector (YOLO + SSD fusion)...")
+        return EnsembleDetector(use_yolo=True, use_ssd=True)
+    elif backend == "ssd":
+        from models.ssd_model import SSDDetector
+        print("[INIT] Loading SSD300-VGG16 detector...")
+        return SSDDetector()
+    else:
+        from models.yolo_model import DualYOLODetector
+        print("[INIT] Loading YOLOv8 detector...")
+        return DualYOLODetector()
+
+
+def run_simulation():
+    """Launch visual simulation mode with animated dogs/humans."""
+    import cv2
+    from config import SIM_FPS, WINDOW_NAME
+    from simulation.simulator import Simulator
+    from simulation.scenarios import ScenarioManager, update_scenario_behavior
+    from utils.logger import EventLogger
+
+    print("=" * 60)
+    print("  SIMULATION MODE — Smart Dog Threat Detection")
+    print("=" * 60)
+    print()
+    print("  No camera or models needed!")
+    print("  Testing threat logic with animated scenarios.")
+    print()
+    print("  Controls:")
+    print("    1-6   : Switch scenario")
+    print("    SPACE  : Pause / Resume")
+    print("    R      : Reset scenario")
+    print("    Q      : Quit")
+    print()
+    for sid, name in ScenarioManager.SCENARIOS.items():
+        print(f"    [{sid}] {name}")
+    print()
+    print("=" * 60)
+
+    sim = Simulator()
+    logger = EventLogger()
+
+    current_scenario = 1
+    scenario_name = ScenarioManager.load(sim, current_scenario)
+    print(f"\n[SIM] Loaded: {scenario_name}")
+
+    frame_delay = 1.0 / SIM_FPS
+
+    try:
+        while True:
+            start_time = time.time()
+
+            if not sim.paused:
+                update_scenario_behavior(sim, current_scenario)
+                sim.frame_count += 1
+
+            result, cnn_results, audio_state = sim.classify_threats()
+            dt = frame_delay if not sim.paused else 0
+            sim.update_ultrasonic(result, dt)
+
+            canvas = sim.render()
+            canvas = sim.draw_hud(canvas, result, audio_state, scenario_name)
+
+            logger.log(
+                num_dogs=len(sim.get_dogs()),
+                num_humans=len(sim.get_humans()),
+                threat_class=result["threat_class"],
+                threat_label=result["threat_label"],
+                confidence=result["confidence"],
+                audio_bark=audio_state.get("bark", False),
+                audio_growl=audio_state.get("growl", False),
+                audio_scream=audio_state.get("scream", False),
+                ultrasonic_triggered=result["trigger_ultrasonic"],
+                notes=f"[SIM-{current_scenario}] {result['reason']}",
+            )
+
+            cv2.imshow(WINDOW_NAME, canvas)
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord("q"):
+                break
+            elif key == ord(" "):
+                sim.paused = not sim.paused
+                print(f"[SIM] {'Paused' if sim.paused else 'Resumed'}")
+            elif key == ord("r"):
+                scenario_name = ScenarioManager.load(sim, current_scenario)
+                print(f"[SIM] Reset: {scenario_name}")
+            elif ord("1") <= key <= ord("6"):
+                current_scenario = key - ord("0")
+                scenario_name = ScenarioManager.load(sim, current_scenario)
+                print(f"\n[SIM] Switched to Scenario {current_scenario}: {scenario_name}")
+
+            elapsed = time.time() - start_time
+            sleep_time = frame_delay - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    except KeyboardInterrupt:
+        print("\n[SIM] Interrupted")
+    finally:
+        cv2.destroyAllWindows()
+        logger.close()
+        if sim.event_log:
+            print("\n  Event Log:")
+            for event in sim.event_log:
+                print(f"    {event}")
+        print(f"\n  Total ultrasonic triggers: {sim.ultrasonic_total}")
+        print("[SIM] Done!")
+
+
+def run_live(detector_backend):
+    """Live mode: webcam + detector + CNN + laptop speaker ultrasonic."""
+    import cv2
+    from models.behavior_net_v2 import BehaviorClassifierV2
+    from models.threat_engine import ThreatEngine
+    from audio.audio_detector import AudioDetector
+    from audio.audio_combiner import AudioCombiner
+    from audio.ultrasonic_trigger import UltrasonicTrigger
+    from utils.ui import UIRenderer
+    from utils.logger import EventLogger
+    from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
+
+    print("=" * 60)
+    print("  LIVE MODE — Smart Dog Threat Detection System")
+    print(f"  Detector: {detector_backend.upper()}")
+    print("=" * 60)
+    print()
+
+    detector = _load_detector(detector_backend)
+    print("[INIT] Loading BehaviorNetV2 CNN...")
+    cnn = BehaviorClassifierV2()
+    engine = ThreatEngine()
+
+    print("[INIT] Starting audio system...")
+    audio_detector = AudioDetector()
+    audio_combiner = AudioCombiner()
+    ultrasonic = UltrasonicTrigger()
+    audio_detector.start()
+
+    print("[INIT] Setting up UI and logger...")
+    ui = UIRenderer()
+    logger = EventLogger()
+
+    print(f"[INIT] Opening camera {CAMERA_INDEX}...")
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+
+    if not cap.isOpened():
+        print("ERROR: Could not open camera!")
+        return
+
+    print(f"[INIT] Camera ready: "
+          f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+          f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+    print("[RUNNING] Press 'q' to quit")
+    print("=" * 60)
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.1)
+                continue
+
+            detections = detector.detect(frame)
+            num_dogs = sum(1 for d in detections if d["class"] == "dog")
+            num_humans = sum(1 for d in detections if d["class"] == "person")
+
+            cnn_results = []
+            if num_dogs > 0:
+                dog_crops = detector.get_dog_crops(frame, detections)
+                for crop, bbox in dog_crops:
+                    cnn_results.append(cnn.classify(crop))
+
+            raw_audio = audio_detector.get_state()
+            audio_combiner.update(raw_audio)
+            audio_state = audio_combiner.get_combined_state(num_dogs, num_humans)
+
+            result = engine.evaluate(
+                cnn_results=cnn_results,
+                num_dogs=num_dogs,
+                num_humans=num_humans,
+                audio_state=audio_state,
+            )
+
+            ultrasonic_fired = False
+            if result["trigger_ultrasonic"]:
+                ultrasonic_fired = ultrasonic.trigger()
+
+            frame = ui.render(
+                frame, detections, result["threat_label"],
+                result["confidence"], audio_state,
+            )
+
+            logger.log(
+                num_dogs=num_dogs,
+                num_humans=num_humans,
+                threat_class=result["threat_class"],
+                threat_label=result["threat_label"],
+                confidence=result["confidence"],
+                audio_bark=audio_state.get("bark", False),
+                audio_growl=audio_state.get("growl", False),
+                audio_scream=audio_state.get("scream", False),
+                ultrasonic_triggered=ultrasonic_fired,
+                notes=f"[{detector_backend.upper()}] {result['reason']}",
+            )
+
+            key = ui.show(frame)
+            if key == ord("q"):
+                break
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        audio_detector.stop()
+        cap.release()
+        ui.cleanup()
+        logger.close()
+        print("[LIVE] Done!")
+
+
+def run_hardware(detector_backend):
+    """Hardware mode: webcam + detector + CNN + Arduino ultrasonic sensor."""
+    import cv2
+    from models.behavior_net_v2 import BehaviorClassifierV2
+    from models.threat_engine import ThreatEngine
+    from audio.audio_detector import AudioDetector
+    from audio.audio_combiner import AudioCombiner
+    from hardware.ultrasonic_hw import UltrasonicHardware
+    from utils.ui import UIRenderer
+    from utils.logger import EventLogger
+    from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
+
+    print("=" * 60)
+    print("  HARDWARE MODE — Arduino + Ultrasonic Sensor")
+    print(f"  Detector: {detector_backend.upper()}")
+    print("=" * 60)
+    print()
+
+    detector = _load_detector(detector_backend)
+    print("[INIT] Loading BehaviorNetV2 CNN...")
+    cnn = BehaviorClassifierV2()
+    engine = ThreatEngine()
+
+    print("[INIT] Starting audio system...")
+    audio_detector = AudioDetector()
+    audio_combiner = AudioCombiner()
+
+    print("[INIT] Connecting to Arduino...")
+    ultrasonic = UltrasonicHardware()
+
+    print("[INIT] Setting up UI and logger...")
+    ui = UIRenderer()
+    logger = EventLogger()
+
+    print(f"[INIT] Opening camera {CAMERA_INDEX}...")
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+
+    if not cap.isOpened():
+        print("ERROR: Could not open camera!")
+        return
+
+    print(f"[INIT] Camera ready: "
+          f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+          f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+    print("[RUNNING] Press 'q' to quit")
+    print("=" * 60)
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.1)
+                continue
+
+            detections = detector.detect(frame)
+            num_dogs = sum(1 for d in detections if d["class"] == "dog")
+            num_humans = sum(1 for d in detections if d["class"] == "person")
+
+            cnn_results = []
+            if num_dogs > 0:
+                dog_crops = detector.get_dog_crops(frame, detections)
+                for crop, bbox in dog_crops:
+                    cnn_results.append(cnn.classify(crop))
+
+            raw_audio = audio_detector.get_state()
+            audio_combiner.update(raw_audio)
+            audio_state = audio_combiner.get_combined_state(num_dogs, num_humans)
+
+            result = engine.evaluate(
+                cnn_results=cnn_results,
+                num_dogs=num_dogs,
+                num_humans=num_humans,
+                audio_state=audio_state,
+            )
+
+            ultrasonic_fired = False
+            if result["trigger_ultrasonic"]:
+                ultrasonic_fired = ultrasonic.trigger()
+
+            frame = ui.render(
+                frame, detections, result["threat_label"],
+                result["confidence"], audio_state,
+            )
+
+            logger.log(
+                num_dogs=num_dogs,
+                num_humans=num_humans,
+                threat_class=result["threat_class"],
+                threat_label=result["threat_label"],
+                confidence=result["confidence"],
+                audio_bark=audio_state.get("bark", False),
+                audio_growl=audio_state.get("growl", False),
+                audio_scream=audio_state.get("scream", False),
+                ultrasonic_triggered=ultrasonic_fired,
+                notes=f"[HW-{detector_backend.upper()}] {result['reason']}",
+            )
+
+            key = ui.show(frame)
+            if key == ord("q"):
+                break
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        audio_detector.stop()
+        ultrasonic.cleanup()
+        cap.release()
+        ui.cleanup()
+        logger.close()
+        print("[HARDWARE] Done!")
+
+
+# ── Run Detection Menu ─────────────────────────────────────────────────────
 
 def menu_run_detection():
     """Submenu: Run detection system."""
@@ -264,9 +606,6 @@ def menu_run_detection():
     print(f"\n  Starting {mode.upper()} mode with {detector.upper()} detector...")
     print("  " + "-" * 50)
     print()
-
-    # Run via main.py
-    from main import run_simulation, run_live, run_hardware
 
     if mode == "simulation":
         run_simulation()
@@ -502,7 +841,6 @@ Examples:
         return
 
     if args.run:
-        from main import run_simulation, run_live, run_hardware
         print()
         print("  ===== SMART DOG THREAT DETECTION SYSTEM =====")
         print(f"  Mode     : {args.run.upper()}")

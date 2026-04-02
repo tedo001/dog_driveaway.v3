@@ -218,17 +218,126 @@ def load_dataset_from_path(src_path, purpose="detection"):
 
 # ── COCO Dog+Human Downloader ──────────────────────────────────────────────
 
-def download_coco(max_images=5000):
+# COCO 2017 URLs and class IDs
+COCO_ANNOTATIONS_URL = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
+COCO_PERSON_ID = 1
+COCO_DOG_ID = 18
+COCO_REMAP = {COCO_DOG_ID: 0, COCO_PERSON_ID: 1}  # 0=dog, 1=person
+
+
+def download_coco(max_images=5000, train_split=0.8):
     """
-    Download COCO 2017 dog+person subset.
-    Wraps data/download_coco_dogs.py functionality.
+    Download COCO 2017 dog+person subset directly.
+
+    Downloads annotations, filters dog/person images, downloads those images,
+    creates YOLO labels and data.yaml.
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import json
+    import zipfile
+    from urllib.request import urlretrieve
 
     try:
-        from data.download_coco_dogs import download_coco_subset
-        download_coco_subset(max_images=max_images)
-        return {"success": True, "images": max_images}
+        coco_dir = DATASET_DIR.parent / "coco_cache"
+        coco_dir.mkdir(parents=True, exist_ok=True)
+
+        # Step 1: Download annotations
+        ann_zip = coco_dir / "annotations_trainval2017.zip"
+        ann_file = coco_dir / "annotations" / "instances_train2017.json"
+
+        if not ann_file.exists():
+            print("[COCO] Downloading annotations (252MB, one time only)...")
+            urlretrieve(COCO_ANNOTATIONS_URL, str(ann_zip))
+            print("[COCO] Extracting annotations...")
+            with zipfile.ZipFile(str(ann_zip), "r") as z:
+                z.extractall(str(coco_dir))
+
+        # Step 2: Parse and filter
+        print("[COCO] Parsing annotations...")
+        with open(str(ann_file), "r") as f:
+            coco_data = json.load(f)
+
+        id_to_image = {img["id"]: img for img in coco_data["images"]}
+        dog_image_ids = set()
+        person_image_ids = set()
+        image_annotations = {}
+
+        for ann in coco_data["annotations"]:
+            cat_id = ann["category_id"]
+            img_id = ann["image_id"]
+            if cat_id not in COCO_REMAP:
+                continue
+            if cat_id == COCO_DOG_ID:
+                dog_image_ids.add(img_id)
+            elif cat_id == COCO_PERSON_ID:
+                person_image_ids.add(img_id)
+            if img_id not in image_annotations:
+                image_annotations[img_id] = []
+            image_annotations[img_id].append(ann)
+
+        selected_ids = list(dog_image_ids)
+        person_only = list(person_image_ids - dog_image_ids)
+        random.shuffle(person_only)
+        selected_ids.extend(person_only[:max_images // 4])
+        random.shuffle(selected_ids)
+        selected_ids = selected_ids[:max_images]
+
+        print(f"[COCO] {len(dog_image_ids)} dog images, {len(person_image_ids)} person images")
+        print(f"[COCO] Selected {len(selected_ids)} to download")
+
+        # Step 3: Download images and create YOLO labels
+        split_idx = int(len(selected_ids) * train_split)
+        splits = {"train": selected_ids[:split_idx], "valid": selected_ids[split_idx:]}
+
+        for split in ["train", "valid"]:
+            (DATASET_DIR / split / "images").mkdir(parents=True, exist_ok=True)
+            (DATASET_DIR / split / "labels").mkdir(parents=True, exist_ok=True)
+
+        total_downloaded = 0
+        for split_name, img_ids in splits.items():
+            print(f"[COCO] Downloading {split_name}: {len(img_ids)} images")
+            for i, img_id in enumerate(tqdm(img_ids, desc=f"  {split_name}")):
+                img_info = id_to_image.get(img_id)
+                if not img_info:
+                    continue
+
+                filename = img_info["file_name"]
+                img_w, img_h = img_info["width"], img_info["height"]
+                dst_img = DATASET_DIR / split_name / "images" / filename
+                dst_lbl = DATASET_DIR / split_name / "labels" / f"{Path(filename).stem}.txt"
+
+                if not dst_img.exists():
+                    try:
+                        urlretrieve(img_info["coco_url"], str(dst_img))
+                        total_downloaded += 1
+                    except Exception:
+                        continue
+
+                anns = image_annotations.get(img_id, [])
+                lines = []
+                for ann in anns:
+                    if ann["category_id"] not in COCO_REMAP:
+                        continue
+                    cls = COCO_REMAP[ann["category_id"]]
+                    bx, by, bw, bh = ann["bbox"]
+                    cx, cy = (bx + bw / 2) / img_w, (by + bh / 2) / img_h
+                    nw, nh = bw / img_w, bh / img_h
+                    cx, cy = max(0, min(1, cx)), max(0, min(1, cy))
+                    nw, nh = max(0, min(1, nw)), max(0, min(1, nh))
+                    if nw > 0.01 and nh > 0.01:
+                        lines.append(f"{cls} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+                if lines:
+                    dst_lbl.write_text("\n".join(lines))
+
+        # Step 4: Create data.yaml
+        (DATASET_DIR / "data.yaml").write_text(
+            f"train: {DATASET_DIR / 'train' / 'images'}\n"
+            f"val: {DATASET_DIR / 'valid' / 'images'}\n\n"
+            f"nc: 2\nnames: ['dog', 'person']\n"
+        )
+
+        print(f"[COCO] Done! {total_downloaded} images downloaded to {DATASET_DIR}")
+        return {"success": True, "images": total_downloaded}
+
     except Exception as e:
         return {"success": False, "error": str(e)}
 
