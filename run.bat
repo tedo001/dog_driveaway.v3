@@ -1,8 +1,10 @@
 @echo off
 title Smart Dog Threat Detection System
 echo ============================================
-echo  Smart Dog Threat Detection System v1.4
+echo  Smart Dog Threat Detection System v3.0
 echo ============================================
 echo.
-python main.py
+echo  Starting unified application...
+echo.
+python app.py %*
 pause

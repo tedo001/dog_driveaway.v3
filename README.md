@@ -32,78 +32,71 @@ Real-time AI system that detects aggressive dogs approaching humans and emits ul
 git clone https://github.com/tedo001/dog_driveaway.v3.git
 cd dog_driveaway.v3
 git checkout claude/smart-dog-threat-detection-bLGM2
-pip install -r requirements.txt
 
-# 2. Run simulation immediately (no data needed)
-python main.py --mode simulation
+# 2. Run the unified app (checks deps, installs if needed)
+python app.py
 ```
 
-Controls: `1-6` switch scenarios, `SPACE` pause, `R` reset, `Q` quit.
+The unified app gives you an interactive menu to do EVERYTHING:
+- **Setup** — check & install dependencies automatically
+- **Run Detection** — simulation, live webcam, or hardware mode
+- **MLOps Pipeline** — load data, preprocess, train all models
+- **System Info** — GPU status, model status, dependency check
 
-## Full Training Pipeline
-
-### Option A: COCO Dataset (Recommended — No Manual Work)
+### CLI Shortcuts (skip the menu)
 
 ```bash
-# Downloads dog+person images from COCO 2017 automatically
+python app.py --setup                          # Check/install dependencies
+python app.py --run simulation                 # Run simulation (no camera needed)
+python app.py --run live --detector yolo       # Run live detection
+python app.py --run live --detector ensemble   # Live with YOLO+SSD fusion (best)
+python app.py --load "D:\dog_cnn"              # Load Roboflow dataset
+python app.py --train all --epochs 60          # Train all models
+python app.py --status                         # View pipeline status
+```
+
+Controls (simulation): `1-6` switch scenarios, `SPACE` pause, `R` reset, `Q` quit.
+
+## Full Training Pipeline (via Unified App)
+
+### Option A: Interactive (Recommended)
+
+```bash
+python app.py
+# Choose [2] MLOps Pipeline → [3] Quick Pipeline
+# Point to your dataset → auto-detect → auto-preprocess → train all
+```
+
+### Option B: CLI One-Liners
+
+```bash
+# Load Roboflow dataset + auto-map classes + train everything
+python app.py --load "/path/to/dataset" && python app.py --train all
+
+# Or download COCO + train
+python app.py --coco 5000 && python app.py --train all
+```
+
+### Option C: Manual Scripts (advanced)
+
+```bash
 python data/download_coco_dogs.py --max 5000
-
-# Create behavior crops for CNN
-python data/prepare_crops.py
-
-# Train all 3 models
-python train/train_yolo.py          # YOLO dog detector (~1-3 hours)
-python train/train_ssd.py           # SSD dog detector (~2-4 hours)
-python train/train_cnn.py           # Behavior classifier (~20-60 min)
-
-# Evaluate
-python evaluate/eval_yolo.py
-python evaluate/eval_ssd.py
-python evaluate/eval_cnn.py
-
-# Run live
-python main.py --mode live --detector yolo
-```
-
-### Option B: Your Own Images
-
-```bash
-# 1. Put your images in data/raw_images/ (.jpg or .png)
-#    Collect from Google Images, phone camera, or YouTube
-
-# 2. Auto-label with COCO-pretrained YOLO (detects dogs + humans instantly)
-python data/prepare_coco_dog_human.py
-
-# 3. Train all models
 python train/train_yolo.py
 python train/train_ssd.py
-python train/train_cnn.py
-
-# 4. Run
+python train/train_cnn_v2.py
 python main.py --mode live --detector yolo
-```
-
-### Option C: Roboflow Dataset
-
-```bash
-# 1. Setup .env with your Private API key
-copy .env.example .env
-# Edit .env → ROBOFLOW_API_KEY=your_private_key
-
-# 2. Download
-python data/download_dataset.py
-
-# 3. Continue with training (same as above)
 ```
 
 ## Project Structure
 
 ```
 dog_driveaway.v3/
-├── main.py                      ← Entry point (3 modes + 2 detectors)
+├── app.py                       ← UNIFIED APP (start here!)
+├── main.py                      ← Detection entry point (3 modes + 3 detectors)
 ├── simulation_main.py           ← Simulation entry point
-├── config.py                    ← All settings
+├── config.py                    ← All settings (GPU auto-detect)
 ├── requirements.txt
+├── run.bat / run.sh             ← Double-click launchers
 ├── .env.example                 ← Environment template (copy to .env)
 │
 ├── models/
@@ -126,9 +119,18 @@ dog_driveaway.v3/
 │   ├── ultrasonic_hw.py         ← Hardware ultrasonic control
 │   └── arduino_sketch.ino       ← Arduino firmware (25kHz PWM)
 │
+├── mlops/
+│   ├── app.py                   ← MLOps pipeline dashboard
+│   ├── data_loader.py           ← Unified data loading (ZIP/folder/COCO)
+│   ├── preprocessor.py          ← Auto class mapping + crop extraction
+│   ├── trainer.py               ← Unified training (YOLO/SSD/CNN)
+│   └── state.py                 ← Pipeline state tracking (JSON)
+│
 ├── data/
 │   ├── download_coco_dogs.py    ← Download COCO dog+person subset
 │   ├── download_dataset.py      ← Download from Roboflow
+│   ├── load_roboflow_behavior.py← Load Roboflow emotion → behavior mapping
+│   ├── load_custom_dataset.py   ← Load custom dataset formats
 │   ├── prepare_coco_dog_human.py← Auto-label your images with COCO YOLO
 │   ├── prepare_crops.py         ← Create CNN training crops
 │   ├── ssd_dataset.py           ← SSD PyTorch Dataset loader
@@ -138,7 +140,8 @@ dog_driveaway.v3/
 ├── train/
 │   ├── train_yolo.py            ← Fine-tune YOLOv8n
 │   ├── train_ssd.py             ← Train SSD300-VGG16
-│   └── train_cnn.py             ← Train BehaviorNet CNN
+│   ├── train_cnn.py             ← Train BehaviorNet CNN v1
+│   └── train_cnn_v2.py          ← Train BehaviorNetV2 (residual + SE)
 │
 ├── evaluate/
 │   ├── eval_yolo.py             ← YOLO metrics (mAP, precision, recall)
@@ -235,6 +238,11 @@ python main.py --mode hardware
 - [x] Arduino hardware bridge
 - [x] Training + evaluation pipeline
 - [x] COCO dataset downloader
+- [x] Ensemble detector (YOLO + SSD fusion)
+- [x] BehaviorNetV2 (residual blocks + SE attention)
+- [x] MLOps pipeline (data loading + preprocessing + training)
+- [x] Unified app.py (one entry point for everything)
+- [x] CUDA GPU optimization (auto-detect + dynamic batch sizing)
 - [ ] Collecting training data ← **YOU ARE HERE**
 - [ ] Training models on collected data
 - [ ] Live camera testing
