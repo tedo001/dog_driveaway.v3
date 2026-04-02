@@ -273,7 +273,7 @@ def load_custom_dataset(class_dirs, train_split=0.8):
     print("  NEXT STEPS:")
     print("    python train/train_yolo.py     # train dog detector")
     print("    python train/train_ssd.py      # train SSD detector")
-    print("    python train/train_cnn.py      # train behavior classifier")
+    print("    python train/train_cnn_v2.py   # train behavior classifier (BehaviorNetV2)")
     print("=" * 60)
 
 

@@ -216,7 +216,7 @@ def download_coco_subset(
     print("    python data/prepare_crops.py        # create CNN behavior crops")
     print("    python train/train_yolo.py           # fine-tune YOLO")
     print("    python train/train_ssd.py            # train SSD")
-    print("    python train/train_cnn.py            # train BehaviorNet")
+    print("    python train/train_cnn_v2.py         # train BehaviorNetV2")
     print("=" * 60)
 
 

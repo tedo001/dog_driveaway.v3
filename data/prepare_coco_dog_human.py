@@ -254,7 +254,7 @@ def prepare_from_images(
     print("  NEXT STEPS:")
     print("    python train/train_yolo.py     # fine-tune YOLO on your data")
     print("    python train/train_ssd.py      # train SSD on your data")
-    print("    python train/train_cnn.py      # train behavior classifier")
+    print("    python train/train_cnn_v2.py   # train behavior classifier (BehaviorNetV2)")
     print("=" * 60)
 
 
