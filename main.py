@@ -7,13 +7,15 @@ Three modes (set SYSTEM_MODE in .env or config.py):
   hardware   : Real webcam + Arduino + external ultrasonic sensor
 
 Two detector backends (set DETECTOR_BACKEND in .env or --detector flag):
-  yolo : YOLOv8n — faster, anchor-free, grid-based
-  ssd  : SSD300-VGG16 — anchor-based, multi-scale feature maps
+  yolo     : YOLOv8n — faster, anchor-free, grid-based
+  ssd      : SSD300-VGG16 — anchor-based, multi-scale feature maps
+  ensemble : YOLO + SSD fused — HIGHEST ACCURACY
 
 Usage:
   python main.py                              → simulation mode
   python main.py --mode live                  → live with YOLO
-  python main.py --mode live --detector ssd   → live with SSD
+  python main.py --mode live --detector ssd      → live with SSD
+  python main.py --mode live --detector ensemble  → live with YOLO+SSD fusion (best)
   python main.py --mode hardware --detector ssd
 """
 
@@ -32,8 +34,12 @@ from config import (
 
 
 def load_detector(backend):
-    """Load the selected detector backend (YOLO or SSD)."""
-    if backend == "ssd":
+    """Load the selected detector backend."""
+    if backend == "ensemble":
+        from models.ensemble_detector import EnsembleDetector
+        print("[INIT] Loading ENSEMBLE detector (YOLO + SSD fusion)...")
+        return EnsembleDetector(use_yolo=True, use_ssd=True)
+    elif backend == "ssd":
         from models.ssd_model import SSDDetector
         print("[INIT] Loading SSD300-VGG16 detector...")
         return SSDDetector()
@@ -281,7 +287,7 @@ def main():
     )
     parser.add_argument(
         "--detector",
-        choices=["yolo", "ssd"],
+        choices=["yolo", "ssd", "ensemble"],
         default=DETECTOR_BACKEND,
         help="Detector backend: yolo (default) or ssd",
     )
