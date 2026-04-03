@@ -1,950 +1,691 @@
 """
-app.py — Smart Dog Threat Detection System — Unified Application.
+app.py — Smart Dog Threat Detection System — GUI Application.
 
-ONE entry point for EVERYTHING:
-  - Run detection (simulation, live webcam, hardware)
-  - MLOps pipeline (load data, preprocess, train models)
-  - System status and setup check
+Run: python app.py
 
-Usage:
-  python app.py                          # Interactive menu (RECOMMENDED)
-  python app.py --run simulation         # Direct: run simulation
-  python app.py --run live               # Direct: run live detection
-  python app.py --run live --detector ssd
-  python app.py --run live --detector ensemble
-  python app.py --run hardware
-  python app.py --load "D:\\dog_cnn"     # Direct: load dataset
-  python app.py --train all              # Direct: train all models
-  python app.py --train yolo --epochs 30
-  python app.py --status                 # Direct: show status
-  python app.py --setup                  # Check/install dependencies
+Tkinter GUI with 4 pages:
+  1. Dashboard   — system status, GPU info, model status
+  2. Data        — load dataset, preprocess, view status
+  3. Training    — train YOLO / CNN with progress
+  4. Detection   — run simulation / live / hardware mode
 """
 
 import sys
 import os
-import time
-import subprocess
-import importlib
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
-# Ensure project root is on path
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-# ── Dependency Check ───────────────────────────────────────────────────────
-
-REQUIRED_PACKAGES = {
-    "torch": "torch",
-    "torchvision": "torchvision",
-    "cv2": "opencv-python",
-    "ultralytics": "ultralytics",
-    "numpy": "numpy",
-    "PIL": "Pillow",
-    "tqdm": "tqdm",
-    "scipy": "scipy",
-    "sklearn": "scikit-learn",
-    "dotenv": "python-dotenv",
-    "matplotlib": "matplotlib",
-    "serial": "pyserial",
-}
-
-OPTIONAL_PACKAGES = {
-    "sounddevice": "sounddevice",
-    "roboflow": "roboflow",
-    "onnx": "onnx",
-    "onnxruntime": "onnxruntime-gpu",
-}
-
-
-def check_dependencies(verbose=True):
-    """Check which required packages are installed."""
-    missing = []
-    installed = []
-
-    for module_name, pip_name in REQUIRED_PACKAGES.items():
-        try:
-            importlib.import_module(module_name)
-            installed.append(pip_name)
-        except ImportError:
-            missing.append(pip_name)
-
-    optional_missing = []
-    optional_installed = []
-    for module_name, pip_name in OPTIONAL_PACKAGES.items():
-        try:
-            importlib.import_module(module_name)
-            optional_installed.append(pip_name)
-        except ImportError:
-            optional_missing.append(pip_name)
-
-    if verbose:
-        print(f"\n  Required packages: {len(installed)}/{len(REQUIRED_PACKAGES)} installed")
-        if missing:
-            print(f"  MISSING: {', '.join(missing)}")
-        print(f"  Optional packages: {len(optional_installed)}/{len(OPTIONAL_PACKAGES)} installed")
-        if optional_missing:
-            print(f"  Optional missing: {', '.join(optional_missing)}")
-
-    return {
-        "all_required_ok": len(missing) == 0,
-        "missing_required": missing,
-        "missing_optional": optional_missing,
-        "installed": installed + optional_installed,
-    }
-
-
-def run_setup():
-    """Interactive setup: check and install dependencies."""
-    print("\n" + "=" * 60)
-    print("  SETUP — Dependency Check & Install")
-    print("=" * 60)
-
-    result = check_dependencies(verbose=True)
-
-    # Check CUDA
-    print()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            vram = round(torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
-            print(f"  GPU: {gpu_name} ({vram} GB VRAM)")
-            print(f"  CUDA: {torch.version.cuda}")
-            print(f"  PyTorch: {torch.__version__}")
-        else:
-            print("  GPU: Not available (CPU mode)")
-            print(f"  PyTorch: {torch.__version__}")
-    except ImportError:
-        print("  PyTorch: NOT INSTALLED")
-
-    if result["all_required_ok"] and not result["missing_optional"]:
-        print("\n  All dependencies are installed!")
-        return True
-
-    # Offer to install missing
-    all_missing = result["missing_required"] + result["missing_optional"]
-    if all_missing:
-        print(f"\n  Missing packages: {', '.join(all_missing)}")
-        print()
-        print("  Install options:")
-        print("    [1] Install all missing packages (pip install)")
-        print("    [2] Install required only (skip optional)")
-        print("    [3] Show install command (manual)")
-        print("    [0] Skip")
-        print()
-
-        choice = input("  Choice: ").strip()
-
-        if choice == "1":
-            _pip_install(all_missing)
-        elif choice == "2" and result["missing_required"]:
-            _pip_install(result["missing_required"])
-        elif choice == "3":
-            if result["missing_required"]:
-                print(f"\n  pip install {' '.join(result['missing_required'])}")
-            if result["missing_optional"]:
-                print(f"  pip install {' '.join(result['missing_optional'])}")
-            print()
-            print("  For CUDA GPU support:")
-            print("  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121")
-        elif choice == "0":
-            pass
-
-    return result["all_required_ok"]
-
-
-def _pip_install(packages):
-    """Install packages via pip."""
-    cmd = [sys.executable, "-m", "pip", "install"] + packages
-    print(f"\n  Running: pip install {' '.join(packages)}")
-    print("  " + "-" * 50)
-    try:
-        subprocess.check_call(cmd)
-        print("\n  Installation complete!")
-    except subprocess.CalledProcessError as e:
-        print(f"\n  Installation failed: {e}")
-        print("  Try running manually:")
-        print(f"    pip install {' '.join(packages)}")
-
-
-# ── UI Helpers ─────────────────────────────────────────────────────────────
-
-def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
-
-
-def print_banner():
-    print()
-    print("=" * 60)
-    print()
-    print("     SMART DOG THREAT DETECTION SYSTEM")
-    print("     ─────────────────────────────────")
-    print("     Detect aggressive dogs • Protect humans")
-    print()
-    print("=" * 60)
-
-    # Device info
-    try:
-        from config import DEVICE_NAME, DEVICE_VRAM_GB, DEVICE
-        if DEVICE != "cpu":
-            print(f"  GPU: {DEVICE_NAME} ({DEVICE_VRAM_GB} GB)")
-        else:
-            print(f"  Device: CPU mode")
-    except Exception:
-        print("  Device: Unknown")
-
-    # Model status
-    try:
-        from config import YOLO_MODEL_PATH, SSD_MODEL_PATH, CNN_MODEL_PATH
-        models = []
-        if YOLO_MODEL_PATH.exists():
-            models.append("YOLO")
-        if SSD_MODEL_PATH.exists():
-            models.append("SSD")
-        if CNN_MODEL_PATH.exists():
-            models.append("CNN")
-        if models:
-            print(f"  Models ready: {', '.join(models)}")
-        else:
-            print("  Models: None trained yet (use MLOps Pipeline first)")
-    except Exception:
-        pass
-
-    print("=" * 60)
-
-
-def prompt_menu(options, prompt_text="Choose"):
-    """Show numbered menu and get user choice."""
-    print()
-    for i, (label, _) in enumerate(options):
-        print(f"    [{i + 1}] {label}")
-    print(f"    [0] Exit")
-    print()
-    while True:
-        try:
-            choice = input(f"  {prompt_text} (0-{len(options)}): ").strip()
-            if choice == "0" or choice.lower() == "q":
-                return None
-            idx = int(choice) - 1
-            if 0 <= idx < len(options):
-                return options[idx]
-        except (ValueError, IndexError):
-            pass
-        print(f"    Invalid. Enter 0-{len(options)}")
-
-
-# ── Detection Functions ────────────────────────────────────────────────────
-
-def _load_detector(backend):
-    """Load the selected detector backend."""
-    if backend == "ensemble":
-        from models.ensemble_detector import EnsembleDetector
-        print("[INIT] Loading ENSEMBLE detector (YOLO + SSD fusion)...")
-        return EnsembleDetector(use_yolo=True, use_ssd=True)
-    elif backend == "ssd":
-        from models.ssd_model import SSDDetector
-        print("[INIT] Loading SSD300-VGG16 detector...")
-        return SSDDetector()
-    else:
-        from models.yolo_model import DualYOLODetector
-        print("[INIT] Loading YOLOv8 detector...")
-        return DualYOLODetector()
-
-
-def run_simulation():
-    """Launch visual simulation mode with animated dogs/humans."""
-    import cv2
-    from config import SIM_FPS, WINDOW_NAME
-    from simulation.simulator import Simulator
-    from simulation.scenarios import ScenarioManager, update_scenario_behavior
-    from utils.logger import EventLogger
-
-    print("=" * 60)
-    print("  SIMULATION MODE — Smart Dog Threat Detection")
-    print("=" * 60)
-    print()
-    print("  No camera or models needed!")
-    print("  Testing threat logic with animated scenarios.")
-    print()
-    print("  Controls:")
-    print("    1-6   : Switch scenario")
-    print("    SPACE  : Pause / Resume")
-    print("    R      : Reset scenario")
-    print("    Q      : Quit")
-    print()
-    for sid, name in ScenarioManager.SCENARIOS.items():
-        print(f"    [{sid}] {name}")
-    print()
-    print("=" * 60)
-
-    sim = Simulator()
-    logger = EventLogger()
-
-    current_scenario = 1
-    scenario_name = ScenarioManager.load(sim, current_scenario)
-    print(f"\n[SIM] Loaded: {scenario_name}")
-
-    frame_delay = 1.0 / SIM_FPS
-
-    try:
-        while True:
-            start_time = time.time()
-
-            if not sim.paused:
-                update_scenario_behavior(sim, current_scenario)
-                sim.frame_count += 1
-
-            result, cnn_results, audio_state = sim.classify_threats()
-            dt = frame_delay if not sim.paused else 0
-            sim.update_ultrasonic(result, dt)
-
-            canvas = sim.render()
-            canvas = sim.draw_hud(canvas, result, audio_state, scenario_name)
-
-            logger.log(
-                num_dogs=len(sim.get_dogs()),
-                num_humans=len(sim.get_humans()),
-                threat_class=result["threat_class"],
-                threat_label=result["threat_label"],
-                confidence=result["confidence"],
-                audio_bark=audio_state.get("bark", False),
-                audio_growl=audio_state.get("growl", False),
-                audio_scream=audio_state.get("scream", False),
-                ultrasonic_triggered=result["trigger_ultrasonic"],
-                notes=f"[SIM-{current_scenario}] {result['reason']}",
-            )
-
-            cv2.imshow(WINDOW_NAME, canvas)
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord("q"):
-                break
-            elif key == ord(" "):
-                sim.paused = not sim.paused
-                print(f"[SIM] {'Paused' if sim.paused else 'Resumed'}")
-            elif key == ord("r"):
-                scenario_name = ScenarioManager.load(sim, current_scenario)
-                print(f"[SIM] Reset: {scenario_name}")
-            elif ord("1") <= key <= ord("6"):
-                current_scenario = key - ord("0")
-                scenario_name = ScenarioManager.load(sim, current_scenario)
-                print(f"\n[SIM] Switched to Scenario {current_scenario}: {scenario_name}")
-
-            elapsed = time.time() - start_time
-            sleep_time = frame_delay - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-    except KeyboardInterrupt:
-        print("\n[SIM] Interrupted")
-    finally:
-        cv2.destroyAllWindows()
-        logger.close()
-        if sim.event_log:
-            print("\n  Event Log:")
-            for event in sim.event_log:
-                print(f"    {event}")
-        print(f"\n  Total ultrasonic triggers: {sim.ultrasonic_total}")
-        print("[SIM] Done!")
-
-
-def run_live(detector_backend):
-    """Live mode: webcam + detector + CNN + laptop speaker ultrasonic."""
-    import cv2
-    from models.behavior_net_v2 import BehaviorClassifierV2
-    from models.threat_engine import ThreatEngine
-    from audio.audio_detector import AudioDetector
-    from audio.audio_combiner import AudioCombiner
-    from audio.ultrasonic_trigger import UltrasonicTrigger
-    from utils.ui import UIRenderer
-    from utils.logger import EventLogger
-    from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
-
-    print("=" * 60)
-    print("  LIVE MODE — Smart Dog Threat Detection System")
-    print(f"  Detector: {detector_backend.upper()}")
-    print("=" * 60)
-    print()
-
-    detector = _load_detector(detector_backend)
-    print("[INIT] Loading BehaviorNetV2 CNN...")
-    cnn = BehaviorClassifierV2()
-    engine = ThreatEngine()
-
-    print("[INIT] Starting audio system...")
-    audio_detector = AudioDetector()
-    audio_combiner = AudioCombiner()
-    ultrasonic = UltrasonicTrigger()
-    audio_detector.start()
-
-    print("[INIT] Setting up UI and logger...")
-    ui = UIRenderer()
-    logger = EventLogger()
-
-    print(f"[INIT] Opening camera {CAMERA_INDEX}...")
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-
-    if not cap.isOpened():
-        print("ERROR: Could not open camera!")
-        return
-
-    print(f"[INIT] Camera ready: "
-          f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-          f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-    print("[RUNNING] Press 'q' to quit")
-    print("=" * 60)
-
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.1)
-                continue
-
-            detections = detector.detect(frame)
-            num_dogs = sum(1 for d in detections if d["class"] == "dog")
-            num_humans = sum(1 for d in detections if d["class"] == "person")
-
-            cnn_results = []
-            if num_dogs > 0:
-                dog_crops = detector.get_dog_crops(frame, detections)
-                for crop, bbox in dog_crops:
-                    cnn_results.append(cnn.classify(crop))
-
-            raw_audio = audio_detector.get_state()
-            audio_combiner.update(raw_audio)
-            audio_state = audio_combiner.get_combined_state(num_dogs, num_humans)
-
-            result = engine.evaluate(
-                cnn_results=cnn_results,
-                num_dogs=num_dogs,
-                num_humans=num_humans,
-                audio_state=audio_state,
-            )
-
-            ultrasonic_fired = False
-            if result["trigger_ultrasonic"]:
-                ultrasonic_fired = ultrasonic.trigger()
-
-            frame = ui.render(
-                frame, detections, result["threat_label"],
-                result["confidence"], audio_state,
-            )
-
-            logger.log(
-                num_dogs=num_dogs,
-                num_humans=num_humans,
-                threat_class=result["threat_class"],
-                threat_label=result["threat_label"],
-                confidence=result["confidence"],
-                audio_bark=audio_state.get("bark", False),
-                audio_growl=audio_state.get("growl", False),
-                audio_scream=audio_state.get("scream", False),
-                ultrasonic_triggered=ultrasonic_fired,
-                notes=f"[{detector_backend.upper()}] {result['reason']}",
-            )
-
-            key = ui.show(frame)
-            if key == ord("q"):
-                break
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        audio_detector.stop()
-        cap.release()
-        ui.cleanup()
-        logger.close()
-        print("[LIVE] Done!")
-
-
-def run_hardware(detector_backend):
-    """Hardware mode: webcam + detector + CNN + Arduino ultrasonic sensor."""
-    import cv2
-    from models.behavior_net_v2 import BehaviorClassifierV2
-    from models.threat_engine import ThreatEngine
-    from audio.audio_detector import AudioDetector
-    from audio.audio_combiner import AudioCombiner
-    from hardware.ultrasonic_hw import UltrasonicHardware
-    from utils.ui import UIRenderer
-    from utils.logger import EventLogger
-    from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
-
-    print("=" * 60)
-    print("  HARDWARE MODE — Arduino + Ultrasonic Sensor")
-    print(f"  Detector: {detector_backend.upper()}")
-    print("=" * 60)
-    print()
-
-    detector = _load_detector(detector_backend)
-    print("[INIT] Loading BehaviorNetV2 CNN...")
-    cnn = BehaviorClassifierV2()
-    engine = ThreatEngine()
-
-    print("[INIT] Starting audio system...")
-    audio_detector = AudioDetector()
-    audio_combiner = AudioCombiner()
-
-    print("[INIT] Connecting to Arduino...")
-    ultrasonic = UltrasonicHardware()
-
-    print("[INIT] Setting up UI and logger...")
-    ui = UIRenderer()
-    logger = EventLogger()
-
-    print(f"[INIT] Opening camera {CAMERA_INDEX}...")
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-
-    if not cap.isOpened():
-        print("ERROR: Could not open camera!")
-        return
-
-    print(f"[INIT] Camera ready: "
-          f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
-          f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-    print("[RUNNING] Press 'q' to quit")
-    print("=" * 60)
-
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.1)
-                continue
-
-            detections = detector.detect(frame)
-            num_dogs = sum(1 for d in detections if d["class"] == "dog")
-            num_humans = sum(1 for d in detections if d["class"] == "person")
-
-            cnn_results = []
-            if num_dogs > 0:
-                dog_crops = detector.get_dog_crops(frame, detections)
-                for crop, bbox in dog_crops:
-                    cnn_results.append(cnn.classify(crop))
-
-            raw_audio = audio_detector.get_state()
-            audio_combiner.update(raw_audio)
-            audio_state = audio_combiner.get_combined_state(num_dogs, num_humans)
-
-            result = engine.evaluate(
-                cnn_results=cnn_results,
-                num_dogs=num_dogs,
-                num_humans=num_humans,
-                audio_state=audio_state,
-            )
-
-            ultrasonic_fired = False
-            if result["trigger_ultrasonic"]:
-                ultrasonic_fired = ultrasonic.trigger()
-
-            frame = ui.render(
-                frame, detections, result["threat_label"],
-                result["confidence"], audio_state,
-            )
-
-            logger.log(
-                num_dogs=num_dogs,
-                num_humans=num_humans,
-                threat_class=result["threat_class"],
-                threat_label=result["threat_label"],
-                confidence=result["confidence"],
-                audio_bark=audio_state.get("bark", False),
-                audio_growl=audio_state.get("growl", False),
-                audio_scream=audio_state.get("scream", False),
-                ultrasonic_triggered=ultrasonic_fired,
-                notes=f"[HW-{detector_backend.upper()}] {result['reason']}",
-            )
-
-            key = ui.show(frame)
-            if key == ord("q"):
-                break
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        audio_detector.stop()
-        ultrasonic.cleanup()
-        cap.release()
-        ui.cleanup()
-        logger.close()
-        print("[HARDWARE] Done!")
-
-
-# ── Run Detection Menu ─────────────────────────────────────────────────────
-
-def menu_run_detection():
-    """Submenu: Run detection system."""
-    options = [
-        ("Simulation  (no camera needed — test logic with animated scenarios)", "simulation"),
-        ("Live        (webcam + laptop speaker ultrasonic)", "live"),
-        ("Hardware    (webcam + Arduino + external ultrasonic)", "hardware"),
-    ]
-
-    choice = prompt_menu(options, "Mode")
-    if not choice:
-        return
-
-    mode = choice[1]
-    detector = "yolo"  # default
-
-    if mode in ("live", "hardware"):
-        det_options = [
-            ("YOLO    (YOLOv8n — fast, recommended)", "yolo"),
-            ("SSD     (SSD300-VGG16 — anchor-based)", "ssd"),
-            ("Ensemble (YOLO + SSD fusion — highest accuracy)", "ensemble"),
-        ]
-        det_choice = prompt_menu(det_options, "Detector")
-        if not det_choice:
-            return
-        detector = det_choice[1]
-
-    print(f"\n  Starting {mode.upper()} mode with {detector.upper()} detector...")
-    print("  " + "-" * 50)
-    print()
-
-    if mode == "simulation":
-        run_simulation()
-    elif mode == "live":
-        run_live(detector)
-    elif mode == "hardware":
-        run_hardware(detector)
-
-
-# ── MLOps Pipeline ─────────────────────────────────────────────────────────
-
-def menu_mlops():
-    """Submenu: MLOps pipeline for data + training."""
-    try:
-        from mlops.state import load_state, save_state, log_event, update_dataset, update_model, get_status_summary
-        from mlops.data_loader import load_dataset_from_path, download_coco, count_images
-        from mlops.preprocessor import auto_select_mapping, create_custom_mapping, extract_behavior_crops, MAPPING_PRESETS
-        from mlops.trainer import get_device_info, clear_old_models, train_yolo, train_ssd, train_cnn, train_all
-    except ImportError as e:
-        print(f"\n  ERROR: Missing dependency — {e}")
-        print("  Run Setup first to install required packages.")
-        input("\n  Press Enter to continue...")
-        return
-
-    state = load_state()
-
-    while True:
-        clear_screen()
-        print()
-        print("=" * 60)
-        print("     MLOps Pipeline — Data & Training")
-        print("=" * 60)
-
-        device = get_device_info()
-        print(f"  Device: {device['display']}")
-
-        # Quick status
-        coco = state["datasets"]["coco"]
-        beh = state["datasets"]["behavior"]
-        print(f"\n  Data:   COCO={'LOADED' if coco['loaded'] else 'NO'}  |  "
-              f"Behavior={'LOADED' if beh['loaded'] else 'NO'}")
-        models_status = []
-        for name, info in state["models"].items():
-            models_status.append(f"{name.upper()}={'OK' if info['trained'] else 'NO'}")
-        print(f"  Models: {' | '.join(models_status)}")
-
-        print("=" * 60)
-
-        options = [
-            ("Load Data        (ZIP, folder, or COCO download)", "load"),
-            ("Train Models     (YOLO, SSD, CNN, or ALL)", "train"),
-            ("Quick Pipeline   (data → preprocess → train ALL)", "quick"),
-            ("Clear Models     (remove old weights)", "clear"),
-            ("View Status      (datasets, models, history)", "status"),
-            ("Back to Main Menu", "back"),
+# ── Color Theme ────────────────────────────────────────────────────────────
+
+BG = "#1e1e2e"
+BG_CARD = "#2a2a3d"
+FG = "#cdd6f4"
+FG_DIM = "#6c7086"
+ACCENT = "#89b4fa"
+GREEN = "#a6e3a1"
+RED = "#f38ba8"
+YELLOW = "#f9e2af"
+ORANGE = "#fab387"
+
+
+# ── Main Application ───────────────────────────────────────────────────────
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Dog Threat Detection System")
+        self.geometry("900x650")
+        self.configure(bg=BG)
+        self.resizable(True, True)
+
+        # Sidebar
+        sidebar = tk.Frame(self, bg=BG_CARD, width=200)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+
+        tk.Label(sidebar, text="DOG THREAT\nDETECTION", font=("Segoe UI", 14, "bold"),
+                 bg=BG_CARD, fg=ACCENT, justify="center").pack(pady=(20, 30))
+
+        self.pages = {}
+        self.nav_buttons = {}
+        self.current_page = None
+
+        nav_items = [
+            ("Dashboard", DashboardPage),
+            ("Data Pipeline", DataPage),
+            ("Training", TrainingPage),
+            ("Run Detection", DetectionPage),
         ]
 
-        choice = prompt_menu(options, "Choose")
+        for name, page_class in nav_items:
+            btn = tk.Button(sidebar, text=name, font=("Segoe UI", 11),
+                            bg=BG_CARD, fg=FG, bd=0, anchor="w", padx=20, pady=10,
+                            activebackground=ACCENT, activeforeground=BG,
+                            cursor="hand2",
+                            command=lambda n=name: self.show_page(n))
+            btn.pack(fill="x")
+            self.nav_buttons[name] = btn
 
-        if choice is None or choice[1] == "back":
-            break
+        # Content area
+        self.content = tk.Frame(self, bg=BG)
+        self.content.pack(side="right", fill="both", expand=True)
 
-        # Delegate to mlops/app.py handlers
-        from mlops.app import (
-            menu_load_data, menu_train, menu_quick_pipeline,
-            menu_clear_models, menu_status,
-        )
+        for name, page_class in nav_items:
+            page = page_class(self.content, self)
+            page.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self.pages[name] = page
 
-        if choice[1] == "load":
-            menu_load_data(state)
-        elif choice[1] == "train":
-            menu_train(state)
-        elif choice[1] == "quick":
-            menu_quick_pipeline(state)
-        elif choice[1] == "clear":
-            menu_clear_models(state)
-        elif choice[1] == "status":
-            menu_status(state)
+        self.show_page("Dashboard")
 
-        # Reload state
-        state = load_state()
+    def show_page(self, name):
+        if self.current_page:
+            self.nav_buttons[self.current_page].configure(bg=BG_CARD, fg=FG)
+        self.current_page = name
+        self.nav_buttons[name].configure(bg=ACCENT, fg=BG)
+        self.pages[name].tkraise()
+        if hasattr(self.pages[name], "on_show"):
+            self.pages[name].on_show()
 
 
-# ── System Info ────────────────────────────────────────────────────────────
+# ── Dashboard Page ─────────────────────────────────────────────────────────
 
-def menu_system_info():
-    """Show full system info."""
-    print("\n" + "=" * 60)
-    print("  SYSTEM INFORMATION")
-    print("=" * 60)
+class DashboardPage(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
 
-    # Python
-    print(f"\n  Python: {sys.version.split()[0]}")
-    print(f"  Path:   {sys.executable}")
+        tk.Label(self, text="Dashboard", font=("Segoe UI", 20, "bold"),
+                 bg=BG, fg=FG).pack(anchor="w", padx=30, pady=(20, 10))
 
-    # Dependencies
-    check_dependencies(verbose=True)
+        self.info_frame = tk.Frame(self, bg=BG)
+        self.info_frame.pack(fill="both", expand=True, padx=30, pady=10)
 
-    # GPU
-    try:
-        import torch
-        print(f"\n  PyTorch: {torch.__version__}")
-        if torch.cuda.is_available():
-            print(f"  CUDA:    {torch.version.cuda}")
-            print(f"  GPU:     {torch.cuda.get_device_name(0)}")
-            vram = round(torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
-            print(f"  VRAM:    {vram} GB")
-        else:
-            print("  CUDA:    Not available")
-    except ImportError:
-        print("\n  PyTorch: NOT INSTALLED")
+        self.status_labels = {}
 
-    # Models
-    print()
-    try:
-        from config import YOLO_MODEL_PATH, SSD_MODEL_PATH, CNN_MODEL_PATH, CNN_SCRIPTED_PATH, YOLO_ONNX_PATH
-        model_files = [
-            ("YOLO detector", YOLO_MODEL_PATH),
-            ("SSD detector", SSD_MODEL_PATH),
-            ("CNN BehaviorNet", CNN_MODEL_PATH),
-            ("CNN Scripted", CNN_SCRIPTED_PATH),
-            ("YOLO ONNX", YOLO_ONNX_PATH),
-        ]
-        for name, path in model_files:
-            if path.exists():
-                size_mb = path.stat().st_size / (1024 * 1024)
-                print(f"  {name:20s}: {path.name} ({size_mb:.1f} MB)")
+    def on_show(self):
+        for w in self.info_frame.winfo_children():
+            w.destroy()
+
+        # GPU Card
+        gpu_card = self._card("GPU / Device")
+        try:
+            from config import DEVICE, DEVICE_NAME, DEVICE_VRAM_GB
+            if DEVICE != "cpu":
+                self._row(gpu_card, "GPU", DEVICE_NAME, GREEN)
+                self._row(gpu_card, "VRAM", f"{DEVICE_VRAM_GB} GB", GREEN)
+                import torch
+                self._row(gpu_card, "CUDA", torch.version.cuda, GREEN)
             else:
-                print(f"  {name:20s}: not found")
-    except Exception as e:
-        print(f"  Model check error: {e}")
+                self._row(gpu_card, "Device", "CPU (no GPU)", YELLOW)
+        except Exception as e:
+            self._row(gpu_card, "Error", str(e), RED)
 
-    # MLOps state
-    try:
-        from mlops.state import load_state, get_status_summary
-        state = load_state()
-        print(get_status_summary(state))
-    except Exception:
-        pass
+        # Models Card
+        model_card = self._card("Models")
+        try:
+            from config import YOLO_MODEL_PATH, CNN_MODEL_PATH
+            yolo_ok = YOLO_MODEL_PATH.exists()
+            cnn_ok = CNN_MODEL_PATH.exists()
+            self._row(model_card, "YOLO Detector",
+                      "Ready" if yolo_ok else "Not trained",
+                      GREEN if yolo_ok else RED)
+            self._row(model_card, "CNN Behavior",
+                      "Ready" if cnn_ok else "Not trained",
+                      GREEN if cnn_ok else RED)
+        except Exception as e:
+            self._row(model_card, "Error", str(e), RED)
 
-    input("\n  Press Enter to continue...")
+        # Data Card
+        data_card = self._card("Data")
+        try:
+            from config import DATASET_DIR, CROPS_DIR
+            det_ok = (DATASET_DIR / "data.yaml").exists()
+            crops_ok = (CROPS_DIR / "train").exists()
+            self._row(data_card, "Detection Data",
+                      "Loaded" if det_ok else "Not loaded",
+                      GREEN if det_ok else FG_DIM)
+            self._row(data_card, "Behavior Crops",
+                      "Loaded" if crops_ok else "Not loaded",
+                      GREEN if crops_ok else FG_DIM)
+        except Exception as e:
+            self._row(data_card, "Error", str(e), RED)
+
+        # Pipeline Card
+        pipe_card = self._card("Pipeline Status")
+        try:
+            from mlops.state import load_state
+            state = load_state()
+            for name, info in state["models"].items():
+                if info["trained"]:
+                    self._row(pipe_card, f"{name.upper()} Training",
+                              f"Done (epoch {info['epochs']})", GREEN)
+                else:
+                    self._row(pipe_card, f"{name.upper()} Training", "Pending", FG_DIM)
+        except Exception:
+            self._row(pipe_card, "State", "No history yet", FG_DIM)
+
+    def _card(self, title):
+        frame = tk.LabelFrame(self.info_frame, text=f"  {title}  ",
+                               font=("Segoe UI", 11, "bold"),
+                               bg=BG_CARD, fg=ACCENT, bd=1, relief="groove",
+                               padx=15, pady=10)
+        frame.pack(fill="x", pady=5)
+        return frame
+
+    def _row(self, parent, label, value, color=FG):
+        row = tk.Frame(parent, bg=BG_CARD)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text=label, font=("Segoe UI", 10),
+                 bg=BG_CARD, fg=FG_DIM, width=18, anchor="w").pack(side="left")
+        tk.Label(row, text=value, font=("Segoe UI", 10, "bold"),
+                 bg=BG_CARD, fg=color, anchor="w").pack(side="left")
 
 
-# ── Main Menu Loop ─────────────────────────────────────────────────────────
+# ── Data Pipeline Page ─────────────────────────────────────────────────────
 
-def main_menu():
-    """Main interactive menu — the ONE entry point."""
-    while True:
-        clear_screen()
-        print_banner()
+class DataPage(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
 
-        options = [
-            ("Run Detection    (simulation / live / hardware)", "run"),
-            ("MLOps Pipeline   (load data, preprocess, train models)", "mlops"),
-            ("System Info      (GPU, models, dependencies)", "info"),
-            ("Setup            (check & install dependencies)", "setup"),
+        tk.Label(self, text="Data Pipeline", font=("Segoe UI", 20, "bold"),
+                 bg=BG, fg=FG).pack(anchor="w", padx=30, pady=(20, 5))
+        tk.Label(self, text="Load dataset → Auto-detect format → Preprocess → Ready for training",
+                 font=("Segoe UI", 10), bg=BG, fg=FG_DIM).pack(anchor="w", padx=30, pady=(0, 15))
+
+        # Path selector
+        path_frame = tk.Frame(self, bg=BG)
+        path_frame.pack(fill="x", padx=30, pady=5)
+
+        tk.Label(path_frame, text="Dataset Path:", font=("Segoe UI", 10),
+                 bg=BG, fg=FG).pack(side="left")
+        self.path_var = tk.StringVar()
+        self.path_entry = tk.Entry(path_frame, textvariable=self.path_var,
+                                    font=("Segoe UI", 10), bg=BG_CARD, fg=FG,
+                                    insertbackground=FG, width=50)
+        self.path_entry.pack(side="left", padx=10, fill="x", expand=True)
+
+        tk.Button(path_frame, text="Browse", font=("Segoe UI", 10),
+                  bg=ACCENT, fg=BG, bd=0, padx=15, pady=5, cursor="hand2",
+                  command=self._browse).pack(side="left")
+
+        # Action buttons
+        btn_frame = tk.Frame(self, bg=BG)
+        btn_frame.pack(fill="x", padx=30, pady=15)
+
+        tk.Button(btn_frame, text="Load & Process Dataset", font=("Segoe UI", 11, "bold"),
+                  bg=GREEN, fg=BG, bd=0, padx=20, pady=10, cursor="hand2",
+                  command=self._load_dataset).pack(side="left", padx=5)
+
+        tk.Button(btn_frame, text="Download COCO (5000 imgs)", font=("Segoe UI", 11),
+                  bg=ORANGE, fg=BG, bd=0, padx=20, pady=10, cursor="hand2",
+                  command=self._download_coco).pack(side="left", padx=5)
+
+        # Log
+        self.log = tk.Text(self, font=("Consolas", 9), bg=BG_CARD, fg=FG,
+                           insertbackground=FG, height=20, state="disabled",
+                           relief="flat", padx=10, pady=10)
+        self.log.pack(fill="both", expand=True, padx=30, pady=(0, 20))
+
+    def _browse(self):
+        path = filedialog.askdirectory(title="Select dataset folder")
+        if not path:
+            path = filedialog.askopenfilename(title="Select dataset ZIP",
+                                               filetypes=[("ZIP files", "*.zip")])
+        if path:
+            self.path_var.set(path)
+
+    def _log(self, msg):
+        self.log.configure(state="normal")
+        self.log.insert("end", msg + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+        self.update_idletasks()
+
+    def _load_dataset(self):
+        path = self.path_var.get().strip()
+        if not path:
+            messagebox.showwarning("No path", "Please select a dataset folder or ZIP file.")
+            return
+
+        def run():
+            try:
+                self._log(f"Loading: {path}")
+                from mlops.data_loader import load_dataset_from_path
+                from mlops.preprocessor import auto_select_mapping, extract_behavior_crops
+                from mlops.state import load_state, update_dataset, log_event
+
+                info = load_dataset_from_path(path)
+                if not info["success"]:
+                    self._log(f"ERROR: {info.get('error')}")
+                    return
+
+                self._log(f"Format: {info['format']}")
+                self._log(f"Classes: {info.get('classes', [])}")
+
+                classes = info.get("classes", [])
+                if classes and info.get("img_dir") and info.get("lbl_dir"):
+                    preset_name, mapping = auto_select_mapping(classes)
+                    if mapping:
+                        self._log(f"Auto-mapping: {preset_name}")
+                        for src, dst in mapping.items():
+                            self._log(f"  {src} -> {dst}")
+
+                        self._log("Extracting behavior crops...")
+                        result = extract_behavior_crops(
+                            img_dir=info["img_dir"],
+                            lbl_dir=info["lbl_dir"],
+                            class_names=classes,
+                            class_mapping=mapping,
+                            clear_old=True,
+                        )
+                        if result["success"]:
+                            state = load_state()
+                            update_dataset(state, "behavior", loaded=True,
+                                           crops=result["stats"].get("train", {}))
+                            log_event(state, "Data Loaded", f"{result['total']} crops")
+                            self._log(f"Done! {result['total']} crops extracted.")
+                        else:
+                            self._log(f"Crop ERROR: {result.get('error')}")
+                    else:
+                        self._log("No auto-mapping found for these classes.")
+                else:
+                    # Detection dataset (copy for YOLO)
+                    from mlops.data_loader import copy_for_detection
+                    if info.get("img_dir") and info.get("lbl_dir"):
+                        self._log("Copying for YOLO training...")
+                        result = copy_for_detection(info, clear_old=True)
+                        if result["success"]:
+                            state = load_state()
+                            update_dataset(state, "detection", loaded=True, images=result["total"])
+                            log_event(state, "Detection Data Loaded", f"{result['total']} images")
+                            self._log(f"Done! {result['total']} images ready.")
+
+                self._log("Pipeline complete. Go to Training tab.")
+            except Exception as e:
+                self._log(f"ERROR: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _download_coco(self):
+        def run():
+            try:
+                self._log("Downloading COCO dog+human dataset (5000 images)...")
+                self._log("This may take a while...")
+                from mlops.data_loader import download_coco
+                from mlops.state import load_state, update_dataset, log_event
+
+                result = download_coco(max_images=5000)
+                if result["success"]:
+                    state = load_state()
+                    update_dataset(state, "detection", loaded=True, images=5000)
+                    log_event(state, "COCO Download", "5000 images")
+                    self._log("COCO dataset ready!")
+                else:
+                    self._log(f"ERROR: {result.get('error')}")
+            except Exception as e:
+                self._log(f"ERROR: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+
+# ── Training Page ──────────────────────────────────────────────────────────
+
+class TrainingPage(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
+        self.training = False
+
+        tk.Label(self, text="Training", font=("Segoe UI", 20, "bold"),
+                 bg=BG, fg=FG).pack(anchor="w", padx=30, pady=(20, 5))
+        tk.Label(self, text="Train YOLO detector and CNN behavior classifier",
+                 font=("Segoe UI", 10), bg=BG, fg=FG_DIM).pack(anchor="w", padx=30, pady=(0, 15))
+
+        # Settings
+        settings_frame = tk.Frame(self, bg=BG)
+        settings_frame.pack(fill="x", padx=30)
+
+        tk.Label(settings_frame, text="Epochs:", font=("Segoe UI", 10),
+                 bg=BG, fg=FG).pack(side="left")
+        self.epochs_var = tk.StringVar(value="60")
+        tk.Entry(settings_frame, textvariable=self.epochs_var, width=6,
+                 font=("Segoe UI", 10), bg=BG_CARD, fg=FG,
+                 insertbackground=FG).pack(side="left", padx=10)
+
+        # Buttons
+        btn_frame = tk.Frame(self, bg=BG)
+        btn_frame.pack(fill="x", padx=30, pady=15)
+
+        self.btn_yolo = tk.Button(btn_frame, text="Train YOLO", font=("Segoe UI", 11, "bold"),
+                                   bg=ACCENT, fg=BG, bd=0, padx=20, pady=10, cursor="hand2",
+                                   command=lambda: self._train("yolo"))
+        self.btn_yolo.pack(side="left", padx=5)
+
+        self.btn_cnn = tk.Button(btn_frame, text="Train CNN", font=("Segoe UI", 11, "bold"),
+                                  bg=ACCENT, fg=BG, bd=0, padx=20, pady=10, cursor="hand2",
+                                  command=lambda: self._train("cnn"))
+        self.btn_cnn.pack(side="left", padx=5)
+
+        self.btn_all = tk.Button(btn_frame, text="Train ALL", font=("Segoe UI", 11, "bold"),
+                                  bg=GREEN, fg=BG, bd=0, padx=20, pady=10, cursor="hand2",
+                                  command=lambda: self._train("all"))
+        self.btn_all.pack(side="left", padx=5)
+
+        tk.Button(btn_frame, text="Clear Models", font=("Segoe UI", 10),
+                  bg=RED, fg=BG, bd=0, padx=15, pady=10, cursor="hand2",
+                  command=self._clear_models).pack(side="right", padx=5)
+
+        # Progress
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(self, variable=self.progress_var,
+                                             maximum=100, length=400)
+        self.progress_bar.pack(fill="x", padx=30, pady=5)
+
+        self.progress_label = tk.Label(self, text="", font=("Segoe UI", 10),
+                                        bg=BG, fg=YELLOW)
+        self.progress_label.pack(anchor="w", padx=30)
+
+        # Log
+        self.log = tk.Text(self, font=("Consolas", 9), bg=BG_CARD, fg=FG,
+                           insertbackground=FG, height=18, state="disabled",
+                           relief="flat", padx=10, pady=10)
+        self.log.pack(fill="both", expand=True, padx=30, pady=(5, 20))
+
+    def _log(self, msg):
+        self.log.configure(state="normal")
+        self.log.insert("end", msg + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+        self.update_idletasks()
+
+    def _set_buttons(self, enabled):
+        state = "normal" if enabled else "disabled"
+        self.btn_yolo.configure(state=state)
+        self.btn_cnn.configure(state=state)
+        self.btn_all.configure(state=state)
+
+    def _train(self, model_name):
+        if self.training:
+            messagebox.showinfo("Busy", "Training already in progress.")
+            return
+
+        try:
+            epochs = int(self.epochs_var.get())
+        except ValueError:
+            messagebox.showwarning("Invalid", "Epochs must be a number.")
+            return
+
+        self.training = True
+        self._set_buttons(False)
+        self.progress_var.set(0)
+
+        def progress_cb(epoch, total, train_metric, val_metric):
+            pct = (epoch / total) * 100
+            self.progress_var.set(pct)
+            self.progress_label.configure(
+                text=f"Epoch {epoch}/{total} — Train: {train_metric:.4f} — Val: {val_metric:.4f}")
+            self._log(f"  Epoch {epoch}/{total} | Train: {train_metric:.4f} | Val: {val_metric:.4f}")
+
+        def run():
+            try:
+                from mlops.trainer import train_yolo, train_cnn, train_all
+                from mlops.state import load_state, update_model, log_event
+
+                state = load_state()
+
+                if model_name == "yolo":
+                    self._log(f"Training YOLO ({epochs} epochs)...")
+                    res = train_yolo(epochs=epochs, progress_callback=progress_cb)
+                    if res["success"]:
+                        update_model(state, "yolo", trained=True, epochs=epochs,
+                                     path=res.get("model_path", ""))
+                        log_event(state, "YOLO Trained", f"epochs={epochs}")
+                        self._log(f"YOLO done! Model: {res['model_path']}")
+                    else:
+                        self._log(f"YOLO FAILED: {res.get('error')}")
+
+                elif model_name == "cnn":
+                    self._log(f"Training CNN BehaviorNetV2 ({epochs} epochs)...")
+                    res = train_cnn(epochs=epochs, progress_callback=progress_cb)
+                    if res["success"]:
+                        update_model(state, "cnn", trained=True, epochs=res["epochs"],
+                                     best_metric=res.get("best_val_acc"),
+                                     path=res.get("model_path", ""))
+                        log_event(state, "CNN Trained", f"acc={res.get('best_val_acc')}")
+                        self._log(f"CNN done! Acc: {res.get('best_val_acc')}")
+                    else:
+                        self._log(f"CNN FAILED: {res.get('error')}")
+
+                elif model_name == "all":
+                    self._log(f"Training ALL models ({epochs} epochs each)...")
+                    results = train_all(epochs=epochs, progress_callback=progress_cb)
+                    for name, res in results.items():
+                        if res.get("success"):
+                            update_model(state, name, trained=True,
+                                         epochs=res.get("epochs", epochs),
+                                         best_metric=res.get("best_val_acc") or None,
+                                         path=res.get("model_path", ""))
+                            log_event(state, f"{name.upper()} Trained", "via Train ALL")
+                            self._log(f"  {name.upper()}: Done!")
+                        else:
+                            self._log(f"  {name.upper()}: FAILED — {res.get('error')}")
+
+                self.progress_var.set(100)
+                self.progress_label.configure(text="Training complete!")
+            except Exception as e:
+                self._log(f"ERROR: {e}")
+            finally:
+                self.training = False
+                self._set_buttons(True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _clear_models(self):
+        if messagebox.askyesno("Clear Models", "Delete all trained model weights?"):
+            from mlops.trainer import clear_old_models
+            cleared = clear_old_models()
+            self._log(f"Cleared {len(cleared)} model files.")
+
+
+# ── Detection Page ─────────────────────────────────────────────────────────
+
+class DetectionPage(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
+
+        tk.Label(self, text="Run Detection", font=("Segoe UI", 20, "bold"),
+                 bg=BG, fg=FG).pack(anchor="w", padx=30, pady=(20, 5))
+        tk.Label(self, text="Choose a mode to start the detection system",
+                 font=("Segoe UI", 10), bg=BG, fg=FG_DIM).pack(anchor="w", padx=30, pady=(0, 20))
+
+        # Mode cards
+        modes = [
+            ("Simulation", "No camera needed — animated test scenarios.\n"
+             "Controls: 1-6 switch scenario, SPACE pause, Q quit.",
+             GREEN, self._run_simulation),
+            ("Live Camera", "Webcam + YOLO detection + CNN behavior + ultrasonic.\n"
+             "Requires: trained models + webcam.",
+             ACCENT, self._run_live),
+            ("Hardware", "Webcam + Arduino + external ultrasonic sensor.\n"
+             "Requires: trained models + webcam + Arduino.",
+             ORANGE, self._run_hardware),
         ]
 
-        choice = prompt_menu(options, "Choose")
+        for title, desc, color, cmd in modes:
+            card = tk.Frame(self, bg=BG_CARD, padx=20, pady=15)
+            card.pack(fill="x", padx=30, pady=5)
 
-        if choice is None:
-            print("\n  Goodbye!\n")
-            break
-        elif choice[1] == "run":
-            menu_run_detection()
-        elif choice[1] == "mlops":
-            menu_mlops()
-        elif choice[1] == "info":
-            menu_system_info()
-        elif choice[1] == "setup":
-            run_setup()
-            input("\n  Press Enter to continue...")
+            header = tk.Frame(card, bg=BG_CARD)
+            header.pack(fill="x")
+
+            tk.Label(header, text=title, font=("Segoe UI", 14, "bold"),
+                     bg=BG_CARD, fg=color).pack(side="left")
+
+            tk.Button(header, text="START", font=("Segoe UI", 10, "bold"),
+                      bg=color, fg=BG, bd=0, padx=20, pady=5, cursor="hand2",
+                      command=cmd).pack(side="right")
+
+            tk.Label(card, text=desc, font=("Segoe UI", 9),
+                     bg=BG_CARD, fg=FG_DIM, justify="left").pack(anchor="w", pady=(5, 0))
+
+        # Status
+        self.status_label = tk.Label(self, text="", font=("Segoe UI", 10),
+                                      bg=BG, fg=YELLOW)
+        self.status_label.pack(anchor="w", padx=30, pady=20)
+
+    def _run_simulation(self):
+        self.status_label.configure(text="Starting simulation...")
+        threading.Thread(target=self._run_detection_mode, args=("simulation",), daemon=True).start()
+
+    def _run_live(self):
+        from config import YOLO_MODEL_PATH, CNN_MODEL_PATH
+        if not YOLO_MODEL_PATH.exists():
+            messagebox.showwarning("No Model", "YOLO model not trained yet.\nGo to Training tab first.")
+            return
+        self.status_label.configure(text="Starting live detection...")
+        threading.Thread(target=self._run_detection_mode, args=("live",), daemon=True).start()
+
+    def _run_hardware(self):
+        from config import YOLO_MODEL_PATH
+        if not YOLO_MODEL_PATH.exists():
+            messagebox.showwarning("No Model", "YOLO model not trained yet.\nGo to Training tab first.")
+            return
+        self.status_label.configure(text="Starting hardware mode...")
+        threading.Thread(target=self._run_detection_mode, args=("hardware",), daemon=True).start()
+
+    def _run_detection_mode(self, mode):
+        try:
+            import cv2
+            import time as _time
+
+            if mode == "simulation":
+                from config import SIM_FPS, WINDOW_NAME
+                from simulation.simulator import Simulator
+                from simulation.scenarios import ScenarioManager, update_scenario_behavior
+
+                sim = Simulator()
+                current_scenario = 1
+                scenario_name = ScenarioManager.load(sim, current_scenario)
+                frame_delay = 1.0 / SIM_FPS
+
+                while True:
+                    start = _time.time()
+                    if not sim.paused:
+                        update_scenario_behavior(sim, current_scenario)
+                        sim.frame_count += 1
+
+                    result, cnn_results, audio_state = sim.classify_threats()
+                    dt = frame_delay if not sim.paused else 0
+                    sim.update_ultrasonic(result, dt)
+
+                    canvas = sim.render()
+                    canvas = sim.draw_hud(canvas, result, audio_state, scenario_name)
+                    cv2.imshow(WINDOW_NAME, canvas)
+
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
+                        break
+                    elif key == ord(" "):
+                        sim.paused = not sim.paused
+                    elif key == ord("r"):
+                        scenario_name = ScenarioManager.load(sim, current_scenario)
+                    elif ord("1") <= key <= ord("6"):
+                        current_scenario = key - ord("0")
+                        scenario_name = ScenarioManager.load(sim, current_scenario)
+
+                    elapsed = _time.time() - start
+                    if frame_delay - elapsed > 0:
+                        _time.sleep(frame_delay - elapsed)
+
+                cv2.destroyAllWindows()
+
+            elif mode in ("live", "hardware"):
+                from models.behavior_net_v2 import BehaviorClassifierV2
+                from models.yolo_model import DualYOLODetector
+                from models.threat_engine import ThreatEngine
+                from audio.audio_detector import AudioDetector
+                from audio.audio_combiner import AudioCombiner
+                from utils.ui import UIRenderer
+                from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
+
+                detector = DualYOLODetector()
+                cnn = BehaviorClassifierV2()
+                engine = ThreatEngine()
+                audio_detector = AudioDetector()
+                audio_combiner = AudioCombiner()
+                audio_detector.start()
+                ui = UIRenderer()
+
+                if mode == "hardware":
+                    from hardware.ultrasonic_hw import UltrasonicHardware
+                    ultrasonic = UltrasonicHardware()
+                else:
+                    from audio.ultrasonic_trigger import UltrasonicTrigger
+                    ultrasonic = UltrasonicTrigger()
+
+                cap = cv2.VideoCapture(CAMERA_INDEX)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+
+                if not cap.isOpened():
+                    self.status_label.configure(text="ERROR: Could not open camera!")
+                    return
+
+                try:
+                    while True:
+                        ret, frame = cap.read()
+                        if not ret:
+                            _time.sleep(0.1)
+                            continue
+
+                        detections = detector.detect(frame)
+                        num_dogs = sum(1 for d in detections if d["class"] == "dog")
+                        num_humans = sum(1 for d in detections if d["class"] == "person")
+
+                        cnn_results = []
+                        if num_dogs > 0:
+                            dog_crops = detector.get_dog_crops(frame, detections)
+                            for crop, bbox in dog_crops:
+                                cnn_results.append(cnn.classify(crop))
+
+                        raw_audio = audio_detector.get_state()
+                        audio_combiner.update(raw_audio)
+                        audio_state = audio_combiner.get_combined_state(num_dogs, num_humans)
+
+                        result = engine.evaluate(
+                            cnn_results=cnn_results, num_dogs=num_dogs,
+                            num_humans=num_humans, audio_state=audio_state)
+
+                        if result["trigger_ultrasonic"]:
+                            ultrasonic.trigger()
+
+                        frame = ui.render(frame, detections, result["threat_label"],
+                                          result["confidence"], audio_state)
+                        key = ui.show(frame)
+                        if key == ord("q"):
+                            break
+                finally:
+                    audio_detector.stop()
+                    cap.release()
+                    ui.cleanup()
+                    if mode == "hardware":
+                        ultrasonic.cleanup()
+
+            self.status_label.configure(text="Detection stopped.")
+        except Exception as e:
+            self.status_label.configure(text=f"Error: {e}")
 
 
-# ── CLI Entry Point ────────────────────────────────────────────────────────
-
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Smart Dog Threat Detection System — Unified Application",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""
-Examples:
-  python app.py                          Interactive menu
-  python app.py --run simulation         Run simulation mode
-  python app.py --run live               Run live detection (YOLO)
-  python app.py --run live --detector ensemble   Live with YOLO+SSD fusion
-  python app.py --load "/path/to/data"   Load dataset for training
-  python app.py --train all              Train all models
-  python app.py --train cnn --epochs 30  Train CNN with 30 epochs
-  python app.py --status                 Show pipeline status
-  python app.py --setup                  Check/install dependencies
-""",
-    )
-    parser.add_argument("--run", type=str, choices=["simulation", "live", "hardware"],
-                        help="Run detection mode")
-    parser.add_argument("--detector", type=str, choices=["yolo", "ssd", "ensemble"],
-                        default="yolo", help="Detector backend (default: yolo)")
-    parser.add_argument("--load", type=str, metavar="PATH",
-                        help="Load dataset from path (ZIP or folder)")
-    parser.add_argument("--train", type=str, choices=["yolo", "ssd", "cnn", "all"],
-                        help="Train model(s)")
-    parser.add_argument("--epochs", type=int, default=None,
-                        help="Override training epochs")
-    parser.add_argument("--status", action="store_true",
-                        help="Show pipeline status")
-    parser.add_argument("--setup", action="store_true",
-                        help="Check and install dependencies")
-    parser.add_argument("--clear", action="store_true",
-                        help="Clear all trained models")
-    parser.add_argument("--coco", type=int, metavar="N",
-                        help="Download COCO dog+human dataset (N images)")
-
-    args = parser.parse_args()
-
-    # If no arguments → interactive menu
-    has_args = any([args.run, args.load, args.train, args.status, args.setup, args.clear, args.coco])
-    if not has_args:
-        main_menu()
-        return
-
-    # ── CLI direct commands ──
-
-    if args.setup:
-        run_setup()
-        return
-
-    if args.status:
-        from mlops.state import load_state, get_status_summary
-        state = load_state()
-        print(get_status_summary(state))
-        return
-
-    if args.run:
-        print()
-        print("  ===== SMART DOG THREAT DETECTION SYSTEM =====")
-        print(f"  Mode     : {args.run.upper()}")
-        print(f"  Detector : {args.detector.upper()}")
-        print()
-        if args.run == "simulation":
-            run_simulation()
-        elif args.run == "live":
-            run_live(args.detector)
-        elif args.run == "hardware":
-            run_hardware(args.detector)
-        return
-
-    if args.clear:
-        from mlops.trainer import clear_old_models
-        from mlops.state import load_state, log_event
-        clear_old_models()
-        state = load_state()
-        log_event(state, "Models Cleared", "All models deleted")
-        print("  All models cleared.")
-        return
-
-    if args.coco:
-        from mlops.data_loader import download_coco
-        from mlops.state import load_state, update_dataset, log_event
-        result = download_coco(max_images=args.coco)
-        if result["success"]:
-            state = load_state()
-            update_dataset(state, "coco", loaded=True, images=args.coco)
-            log_event(state, "COCO Download", f"{args.coco} images")
-            print(f"  COCO dataset ready: {args.coco} images")
-        else:
-            print(f"  ERROR: {result.get('error')}")
-        return
-
-    if args.load:
-        from mlops.data_loader import load_dataset_from_path
-        from mlops.preprocessor import auto_select_mapping, extract_behavior_crops
-        from mlops.state import load_state, update_dataset, log_event
-
-        info = load_dataset_from_path(args.load)
-        if info["success"]:
-            print(f"\n  Dataset loaded: {info['format']}")
-            print(f"  Classes: {info.get('classes', [])}")
-
-            classes = info.get("classes", [])
-            if classes:
-                preset_name, mapping = auto_select_mapping(classes)
-                if mapping:
-                    print(f"  Auto-mapping: {preset_name}")
-                    result = extract_behavior_crops(
-                        img_dir=info["img_dir"],
-                        lbl_dir=info["lbl_dir"],
-                        class_names=classes,
-                        class_mapping=mapping,
-                        clear_old=True,
-                    )
-                    if result["success"]:
-                        state = load_state()
-                        update_dataset(state, "behavior", loaded=True,
-                                       crops=result["stats"].get("train", {}))
-                        log_event(state, "Data Loaded", f"{result['total']} crops")
-        else:
-            print(f"  ERROR: {info.get('error')}")
-        return
-
-    if args.train:
-        from mlops.trainer import train_yolo, train_ssd, train_cnn, train_all
-        from mlops.state import load_state, update_model, log_event
-
-        state = load_state()
-        epochs = args.epochs
-
-        if args.train == "all":
-            results = train_all(epochs=epochs)
-            for name, res in results.items():
-                if res.get("success"):
-                    update_model(state, name, trained=True,
-                                 epochs=res.get("epochs", epochs or 60),
-                                 best_metric=res.get("best_val_acc") or res.get("best_val_loss"),
-                                 path=res.get("model_path", ""))
-                    log_event(state, f"{name.upper()} Trained", f"epochs={res.get('epochs')}")
-        elif args.train == "yolo":
-            res = train_yolo(epochs=epochs)
-            if res.get("success"):
-                update_model(state, "yolo", trained=True, epochs=epochs or 60,
-                             path=res.get("model_path", ""))
-                log_event(state, "YOLO Trained", f"epochs={epochs or 60}")
-        elif args.train == "ssd":
-            res = train_ssd(epochs=epochs)
-            if res.get("success"):
-                update_model(state, "ssd", trained=True, epochs=res.get("epochs"),
-                             best_metric=res.get("best_val_loss"),
-                             path=res.get("model_path", ""))
-                log_event(state, "SSD Trained", f"epochs={res.get('epochs')}")
-        elif args.train == "cnn":
-            res = train_cnn(epochs=epochs)
-            if res.get("success"):
-                update_model(state, "cnn", trained=True, epochs=res.get("epochs"),
-                             best_metric=res.get("best_val_acc"),
-                             path=res.get("model_path", ""))
-                log_event(state, "CNN Trained", f"epochs={res.get('epochs')}")
-        return
-
+# ── Entry Point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    app = App()
+    app.mainloop()

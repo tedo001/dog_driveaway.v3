@@ -181,7 +181,7 @@ def load_dataset_from_path(src_path, purpose="detection"):
 
     Args:
         src_path: Path to ZIP file or extracted folder
-        purpose: "detection" (YOLO/SSD) or "behavior" (CNN crops)
+        purpose: "detection" (YOLO) or "behavior" (CNN crops)
 
     Returns:
         dict with dataset info and status
@@ -346,7 +346,7 @@ def download_coco(max_images=5000, train_split=0.8):
 
 def copy_for_detection(src_info, clear_old=True):
     """
-    Copy a YOLO-format dataset to DATASET_DIR for YOLO/SSD training.
+    Copy a YOLO-format dataset to DATASET_DIR for YOLO training.
 
     Args:
         src_info: dict from load_dataset_from_path()
