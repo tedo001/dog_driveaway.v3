@@ -133,27 +133,27 @@ class BehaviorClassifierV2:
         import torch
         from models.behavior_net_v2 import BehaviorNetV2
 
-        self.device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+        self.torch_device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
         self.input_size = CNN_INPUT_SIZE
 
         # ── FIX: read num_classes directly from the saved checkpoint ──────────
         # This prevents mismatches when the model was trained with fewer classes
         # than CNN_NUM_CLASSES in config.py (e.g. trained with 2, config says 4).
-        checkpoint = torch.load(str(CNN_MODEL_PATH), map_location=self.device)
+        checkpoint = torch.load(str(CNN_MODEL_PATH), map_location=self.torch_device, weights_only=True)
         num_classes = checkpoint["fc2.weight"].shape[0]  # reads [2,256] → 2
         print(f"[BehaviorClassifierV2] Loading model with num_classes={num_classes}")
 
         self.model = BehaviorNetV2(num_classes=num_classes)
         self.model.load_state_dict(checkpoint)
-        self.model.to(self.device)
+        self.model.to(self.torch_device)
         self.model.eval()
 
         # Build class name list from THREAT_CLASSES in config, trimmed to num_classes
         from config import THREAT_CLASSES
         self.class_names = [THREAT_CLASSES[i] for i in range(num_classes)]
         print(f"[BehaviorClassifierV2] Classes: {self.class_names}")
-        #total_params = sum(p.numel() for p in self.model.parameters())
-        #print(f"[CNN-V2] BehaviorNetV2 on {self.torch_device} ({total_params:,} params)")
+        total_params = sum(p.numel() for p in self.model.parameters())
+        print(f"[CNN-V2] BehaviorNetV2 on {self.torch_device} ({total_params:,} params)")
 
     def preprocess(self, crop):
         img = cv2.resize(crop, (CNN_INPUT_SIZE, CNN_INPUT_SIZE))
