@@ -32,9 +32,9 @@ CROPS_DIR = DATA_DIR / "crops"
 # ── Device Auto-Detection ────────────────────────────────────────────────────
 import torch as _torch
 if _torch.cuda.is_available():
-    DEVICE = "0"
+    DEVICE = "cuda"
     DEVICE_NAME = _torch.cuda.get_device_name(0)
-    DEVICE_VRAM_GB = round(_torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
+    DEVICE_VRAM_GB = round(_torch.cuda.get_device_properties(0).total_memory / (1024**3), 1)
 else:
     DEVICE = "cpu"
     DEVICE_NAME = "CPU"

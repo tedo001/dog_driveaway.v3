@@ -42,7 +42,7 @@ logger = logging.getLogger("DogThreat")
 
 # ── Admin Config ──────────────────────────────────────────────────────────
 ADMIN_CONFIG_FILE = PROJECT_ROOT / "admin_config.json"
-DEFAULT_ADMIN = {"password": "admin123", "roboflow_api_key": "", "roboflow_workspace": ""}
+DEFAULT_ADMIN = {"password": "admin@123", "roboflow_api_key": "", "roboflow_workspace": ""}
 
 
 def load_admin_config():
