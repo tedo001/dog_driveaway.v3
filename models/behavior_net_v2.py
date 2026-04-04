@@ -128,36 +128,32 @@ class BehaviorNetV2(nn.Module):
 
 
 class BehaviorClassifierV2:
-    """
-    Inference wrapper for BehaviorNetV2.
-    Same interface as BehaviorClassifier (drop-in replacement).
-    """
+    def __init__(self):
+        from config import CNN_MODEL_PATH, CNN_INPUT_SIZE, DEVICE
+        import torch
+        from models.behavior_net_v2 import BehaviorNetV2
 
-    CNN_V2_PATH = Path(__file__).resolve().parent.parent / "export" / "behavior_net_v2.pt"
+        self.device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+        self.input_size = CNN_INPUT_SIZE
 
-    def __init__(self, model_path=None, device=None, num_classes=None):
-        self.device_str = device or DEVICE
-        if self.device_str != "cpu":
-            self.device_str = f"cuda:{self.device_str}" if not str(self.device_str).startswith("cuda") else self.device_str
-        self.torch_device = torch.device(self.device_str if torch.cuda.is_available() else "cpu")
+        # ── FIX: read num_classes directly from the saved checkpoint ──────────
+        # This prevents mismatches when the model was trained with fewer classes
+        # than CNN_NUM_CLASSES in config.py (e.g. trained with 2, config says 4).
+        checkpoint = torch.load(str(CNN_MODEL_PATH), map_location=self.device)
+        num_classes = checkpoint["fc2.weight"].shape[0]  # reads [2,256] → 2
+        print(f"[BehaviorClassifierV2] Loading model with num_classes={num_classes}")
 
-        # Auto-detect number of classes from saved model or use config
-        self.num_classes = num_classes or CNN_NUM_CLASSES
-        model_file = Path(model_path) if model_path else self.CNN_V2_PATH
-
-        self.model = BehaviorNetV2(num_classes=self.num_classes)
-
-        if model_file.exists():
-            print(f"[CNN-V2] Loading BehaviorNetV2: {model_file}")
-            state_dict = torch.load(str(model_file), map_location=self.torch_device, weights_only=True)
-            self.model.load_state_dict(state_dict)
-        else:
-            print(f"[CNN-V2] No trained model found — using random weights")
-            print(f"[CNN-V2] Train with: python app.py --train cnn")
-        self.model.to(self.torch_device)
+        self.model = BehaviorNetV2(num_classes=num_classes)
+        self.model.load_state_dict(checkpoint)
+        self.model.to(self.device)
         self.model.eval()
-        total_params = sum(p.numel() for p in self.model.parameters())
-        print(f"[CNN-V2] BehaviorNetV2 on {self.torch_device} ({total_params:,} params)")
+
+        # Build class name list from THREAT_CLASSES in config, trimmed to num_classes
+        from config import THREAT_CLASSES
+        self.class_names = [THREAT_CLASSES[i] for i in range(num_classes)]
+        print(f"[BehaviorClassifierV2] Classes: {self.class_names}")
+        #total_params = sum(p.numel() for p in self.model.parameters())
+        #print(f"[CNN-V2] BehaviorNetV2 on {self.torch_device} ({total_params:,} params)")
 
     def preprocess(self, crop):
         img = cv2.resize(crop, (CNN_INPUT_SIZE, CNN_INPUT_SIZE))
