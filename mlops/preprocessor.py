@@ -140,6 +140,7 @@ def extract_behavior_crops(
     class_mapping,
     train_split=0.8,
     clear_old=False,
+    all_splits=None,
 ):
     """
     Extract CNN behavior crops from YOLO-labeled images.
@@ -180,20 +181,38 @@ def extract_behavior_crops(
         for beh in behaviors:
             (CROPS_DIR / split / beh).mkdir(parents=True, exist_ok=True)
 
-    # Collect all images
-    images = []
-    for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp"]:
-        images.extend(list(img_dir.glob(ext)))
+    # Collect images from all splits or single directory
+    image_label_pairs = []
+    if all_splits:
+        # Use pre-existing splits from dataset (e.g. Roboflow train/valid)
+        for split_info in all_splits:
+            s_img_dir = Path(split_info["img_dir"])
+            s_lbl_dir = Path(split_info["lbl_dir"])
+            s_name = split_info["split"]
+            # Map valid/val to "val", train to "train"
+            target_split = "val" if s_name in ("valid", "val", "test") else "train"
+            for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp"]:
+                for img_path in s_img_dir.glob(ext):
+                    lbl_path = s_lbl_dir / f"{img_path.stem}.txt"
+                    if lbl_path.exists():
+                        image_label_pairs.append((img_path, lbl_path, target_split))
+    else:
+        # Single directory — do random train/val split
+        images = []
+        for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp"]:
+            images.extend(list(img_dir.glob(ext)))
+        random.seed(42)
+        random.shuffle(images)
+        split_idx = int(len(images) * train_split)
+        for idx, img_path in enumerate(images):
+            lbl_path = lbl_dir / f"{img_path.stem}.txt"
+            target_split = "train" if idx < split_idx else "val"
+            image_label_pairs.append((img_path, lbl_path, target_split))
 
-    if not images:
+    if not image_label_pairs:
         return {"success": False, "error": f"No images found in {img_dir}"}
 
-    # Shuffle and split
-    random.seed(42)
-    random.shuffle(images)
-    split_idx = int(len(images) * train_split)
-
-    print(f"\n  Extracting behavior crops from {len(images)} images...")
+    print(f"\n  Extracting behavior crops from {len(image_label_pairs)} images...")
     print(f"  Class mapping: {class_mapping}")
     print(f"  Output: {CROPS_DIR}")
     print()
@@ -202,13 +221,10 @@ def extract_behavior_crops(
     source_stats = Counter()
     skipped = 0
 
-    for idx, img_path in enumerate(tqdm(images, desc="  Cropping")):
-        lbl_path = lbl_dir / f"{img_path.stem}.txt"
+    for idx, (img_path, lbl_path, split_name) in enumerate(tqdm(image_label_pairs, desc="  Cropping")):
         if not lbl_path.exists():
             skipped += 1
             continue
-
-        split_name = "train" if idx < split_idx else "val"
 
         # Read image
         frame = cv2.imread(str(img_path))

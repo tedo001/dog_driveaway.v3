@@ -1,7 +1,8 @@
 """
-models/yolo_model.py — Dual YOLO detection: custom dog detector + COCO person detector.
-Uses fine-tuned YOLOv8n for dogs and pretrained YOLOv8n for humans.
-Optimized for RTX 4060 CUDA inference.
+models/yolo_model.py — YOLO detector for dog + person.
+
+When custom model exists: uses it (classes 0=dog, 1=person)
+When no custom model: uses COCO pretrained (class 16=dog, 0=person)
 """
 
 import torch
@@ -17,124 +18,96 @@ from config import (
     YOLO_IMGSZ,
 )
 
+COCO_DOG_CLASS = 16
+COCO_PERSON_CLASS = 0
+
 
 class DualYOLODetector:
     """
-    Runs two YOLO models:
-      1. Custom fine-tuned model for dog detection
-      2. Pretrained COCO model for person detection (class 0 in COCO)
-    Returns unified detection list with bounding boxes and classes.
+    Smart YOLO detector:
+      - If custom model trained: single model (0=dog, 1=person)
+      - If no custom model: COCO pretrained filtering for dog(16) + person(0)
     """
-
-    COCO_PERSON_CLASS = 0  # COCO class index for 'person'
 
     def __init__(self, dog_model_path=None, device=None):
         self.device = device or YOLO_DEVICE
         dog_path = Path(dog_model_path) if dog_model_path else YOLO_MODEL_PATH
 
-        # Load custom dog detector
         if dog_path.exists():
-            print(f"[YOLO] Loading custom dog detector: {dog_path}")
-            self.dog_model = YOLO(str(dog_path))
+            print(f"[YOLO] Loading custom model: {dog_path}")
+            self.model = YOLO(str(dog_path))
+            self.custom_model = True
         else:
-            print(f"[YOLO] Custom model not found at {dog_path}, using base model")
-            self.dog_model = YOLO(YOLO_BASE_MODEL)
+            print(f"[YOLO] No custom model found, using COCO pretrained")
+            self.model = YOLO(YOLO_BASE_MODEL)
+            self.custom_model = False
 
-        # Load pretrained COCO model for person detection
-        print(f"[YOLO] Loading COCO person detector: {YOLO_BASE_MODEL}")
-        self.person_model = YOLO(YOLO_BASE_MODEL)
-
-        # Warm up models on GPU
         self._warmup()
 
     def _warmup(self):
-        """Run dummy inference to warm up GPU."""
-        dummy = torch.zeros(1, 3, YOLO_IMGSZ, YOLO_IMGSZ).to(self.device)
         try:
-            self.dog_model.predict(
-                source=dummy, device=self.device, verbose=False,
-            )
-            self.person_model.predict(
-                source=dummy, device=self.device, verbose=False,
-            )
-            print("[YOLO] GPU warmup complete")
+            dummy = torch.zeros(1, 3, 320, 320)
+            self.model.predict(source=dummy, device=self.device, verbose=False)
+            print("[YOLO] Warmup complete")
         except Exception:
-            print("[YOLO] Warmup skipped (non-critical)")
+            pass
 
     def detect(self, frame):
-        """
-        Run detection on a single BGR frame.
+        if self.custom_model:
+            return self._detect_custom(frame)
+        else:
+            return self._detect_coco(frame)
 
-        Args:
-            frame: numpy array (H, W, 3) BGR image.
-
-        Returns:
-            list of dicts: [
-                {
-                    'bbox': (x1, y1, x2, y2),
-                    'class': 'dog' or 'person',
-                    'confidence': float,
-                },
-                ...
-            ]
-        """
+    def _detect_custom(self, frame):
+        """Custom trained model: 0=dog, 1=person."""
         detections = []
-
-        # Detect dogs with custom model
-        dog_results = self.dog_model.predict(
-            source=frame,
-            conf=YOLO_CONF_THRESHOLD,
-            iou=YOLO_IOU_THRESHOLD,
-            device=self.device,
-            imgsz=YOLO_IMGSZ,
-            verbose=False,
+        results = self.model.predict(
+            source=frame, conf=YOLO_CONF_THRESHOLD, iou=YOLO_IOU_THRESHOLD,
+            device=self.device, imgsz=YOLO_IMGSZ, verbose=False,
         )
-        for result in dog_results:
+        for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0])
-                detections.append({
-                    "bbox": (x1, y1, x2, y2),
-                    "class": "dog",
-                    "confidence": conf,
-                })
+                cls_id = int(box.cls[0])
+                cls_name = "dog" if cls_id == 0 else "person" if cls_id == 1 else None
+                if cls_name:
+                    detections.append({
+                        "bbox": (x1, y1, x2, y2),
+                        "class": cls_name,
+                        "confidence": conf,
+                    })
+        return detections
 
-        # Detect persons with COCO model
-        person_results = self.person_model.predict(
-            source=frame,
-            conf=YOLO_CONF_THRESHOLD,
-            iou=YOLO_IOU_THRESHOLD,
-            device=self.device,
-            imgsz=YOLO_IMGSZ,
-            classes=[self.COCO_PERSON_CLASS],
-            verbose=False,
+    def _detect_coco(self, frame):
+        """COCO pretrained: dog=16, person=0."""
+        detections = []
+        results = self.model.predict(
+            source=frame, conf=YOLO_CONF_THRESHOLD, iou=YOLO_IOU_THRESHOLD,
+            device=self.device, imgsz=YOLO_IMGSZ, verbose=False,
+            classes=[COCO_DOG_CLASS, COCO_PERSON_CLASS],
         )
-        for result in person_results:
+        for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0])
+                cls_id = int(box.cls[0])
+                if cls_id == COCO_DOG_CLASS:
+                    cls_name = "dog"
+                elif cls_id == COCO_PERSON_CLASS:
+                    cls_name = "person"
+                else:
+                    continue
                 detections.append({
                     "bbox": (x1, y1, x2, y2),
-                    "class": "person",
+                    "class": cls_name,
                     "confidence": conf,
                 })
-
         return detections
 
     def get_dog_crops(self, frame, detections=None):
-        """
-        Extract cropped dog regions from frame.
-
-        Args:
-            frame: BGR numpy array.
-            detections: Optional pre-computed detections. If None, runs detect().
-
-        Returns:
-            list of (crop, bbox) tuples where crop is a BGR numpy array.
-        """
         if detections is None:
             detections = self.detect(frame)
-
         crops = []
         h, w = frame.shape[:2]
         for det in detections:
@@ -146,15 +119,4 @@ class DualYOLODetector:
             if x2 - x1 > 10 and y2 - y1 > 10:
                 crop = frame[y1:y2, x1:x2]
                 crops.append((crop, det["bbox"]))
-
         return crops
-
-    @property
-    def dog_count(self):
-        """Return count from last detection (for convenience)."""
-        return self._last_dog_count if hasattr(self, "_last_dog_count") else 0
-
-    @property
-    def person_count(self):
-        """Return count from last detection (for convenience)."""
-        return self._last_person_count if hasattr(self, "_last_person_count") else 0

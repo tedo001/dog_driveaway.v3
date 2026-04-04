@@ -42,7 +42,7 @@ def detect_format(src_dir):
       - lbl_dir: path to labels directory
     """
     src = Path(src_dir)
-    result = {"format": "unknown", "data_yaml": None, "classes": [], "img_dir": None, "lbl_dir": None}
+    result = {"format": "unknown", "data_yaml": None, "classes": [], "img_dir": None, "lbl_dir": None, "all_splits": []}
 
     # Check for data.yaml (Roboflow / YOLO format)
     yaml_path = None
@@ -86,6 +86,24 @@ def detect_format(src_dir):
         if nested:
             result["format"] = "custom_nested"
             result["img_dir"] = src  # root contains nested pairs
+
+    # Collect all split directories (train, valid, test)
+    all_splits = []
+    for split_name in ["train", "valid", "val", "test"]:
+        split_dir = src / split_name
+        if split_dir.exists():
+            s_img = s_lbl = None
+            for img_name in ["images", "image", "img"]:
+                if (split_dir / img_name).exists():
+                    s_img = split_dir / img_name
+                    break
+            for lbl_name in ["labels", "label", "lbl"]:
+                if (split_dir / lbl_name).exists():
+                    s_lbl = split_dir / lbl_name
+                    break
+            if s_img and s_lbl:
+                all_splits.append({"split": split_name, "img_dir": s_img, "lbl_dir": s_lbl})
+    result["all_splits"] = all_splits
 
     # If we have img+lbl dirs but no yaml, it's plain YOLO
     if result["img_dir"] and result["lbl_dir"] and result["format"] == "unknown":
@@ -213,6 +231,7 @@ def load_dataset_from_path(src_path, purpose="detection"):
         "img_dir": str(fmt["img_dir"]) if fmt["img_dir"] else None,
         "lbl_dir": str(fmt["lbl_dir"]) if fmt["lbl_dir"] else None,
         "data_yaml": str(fmt["data_yaml"]) if fmt["data_yaml"] else None,
+        "all_splits": [{"split": s["split"], "img_dir": str(s["img_dir"]), "lbl_dir": str(s["lbl_dir"])} for s in fmt.get("all_splits", [])],
     }
 
 
