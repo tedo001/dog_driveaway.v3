@@ -183,15 +183,68 @@ def extract_zip(zip_path, dest_dir=None):
     return dest_dir
 
 
-# ── Unified Data Loader ─────────────────────────────────────────────────────
+# ── Image Counting Utilities ────────────────────────────────────────────────
+
+# FIX: use suffix.lower() so .JPG / .PNG / .JPEG are counted correctly.
+# The old glob-based approach ("*.jpg") was case-sensitive and silently
+# skipped uppercase-extension files, causing IDLE to show 0 in the dashboard.
+_IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
 
 def count_images(directory):
-    """Count image files in a directory."""
-    count = 0
-    for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp"]:
-        count += len(list(Path(directory).glob(ext)))
-    return count
+    """
+    Count image files in a directory.
 
+    FIX: uses suffix.lower() for case-insensitive matching so files saved
+    as .JPG / .PNG / .JPEG are counted correctly on all platforms.
+    Previously used glob('*.jpg') which silently skipped uppercase extensions.
+    """
+    return sum(
+        1 for f in Path(directory).iterdir()
+        if f.is_file() and f.suffix.lower() in _IMG_EXTS
+    )
+
+
+def get_behavior_class_counts():
+    """
+    Return per-class image counts aggregated from BOTH train AND val splits.
+
+    This is the function the dashboard should call to display accurate
+    DANGER / IDLE counts. Scanning only 'train' was causing IDLE: 0 when
+    crops existed in val but not exclusively in train.
+
+    Returns:
+        dict: { "DANGER": <int>, "IDLE": <int>, ... }
+              Keys are the actual subfolder names found on disk.
+    """
+    counts = {}
+
+    print("\n[DEBUG] get_behavior_class_counts()")
+    print(f"[DEBUG] CROPS_DIR = {CROPS_DIR}")
+
+    for split in ["train", "val"]:
+        split_dir = CROPS_DIR / split
+        if not split_dir.exists():
+            print(f"[DEBUG]   split '{split}' dir missing: {split_dir}")
+            continue
+
+        cls_dirs = sorted(d for d in split_dir.iterdir() if d.is_dir())
+        print(f"[DEBUG]   {split}/ → class folders: {[d.name for d in cls_dirs]}")
+
+        for cls_dir in cls_dirs:
+            cls_name = cls_dir.name
+            n = sum(
+                1 for f in cls_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in _IMG_EXTS
+            )
+            counts[cls_name] = counts.get(cls_name, 0) + n
+            print(f"[DEBUG]     {split}/{cls_name}: {n} images")
+
+    print(f"[DEBUG] Final class counts: {counts}\n")
+    return counts
+
+
+# ── Unified Data Loader ─────────────────────────────────────────────────────
 
 def load_dataset_from_path(src_path, purpose="detection"):
     """
@@ -425,3 +478,77 @@ def copy_for_detection(src_info, clear_old=True):
     print(f"\n  Copied {copied} image-label pairs to {DATASET_DIR}")
     print(f"  Train: {split} | Val: {copied - split}")
     return {"success": True, "total": copied, "train": split, "val": copied - split}
+
+
+# ── CNN Data Loader ────────────────────────────────────────────────────────
+
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+import torchvision.transforms as transforms
+
+
+def load_cnn_data(batch_size=32):
+    """
+    CNN data loader using BOTH train and val folders from CROPS_DIR.
+
+    FIX: uses is_valid_file with suffix.lower() so .JPG/.PNG files are
+    recognized by torchvision regardless of extension case.
+    Raises RuntimeError with a clear message if DANGER or IDLE is missing.
+    """
+    train_dir = CROPS_DIR / "train"
+    val_dir   = CROPS_DIR / "val"
+
+    print("\n[DEBUG] load_cnn_data()")
+    print(f"[DEBUG] train_dir = {train_dir}  (exists={train_dir.exists()})")
+    print(f"[DEBUG] val_dir   = {val_dir}  (exists={val_dir.exists()})")
+
+    if not train_dir.exists() or not val_dir.exists():
+        raise RuntimeError(
+            f"Train or Val folder missing under CROPS_DIR={CROPS_DIR}. "
+            f"Expected: {train_dir} and {val_dir}"
+        )
+
+    transform = transforms.Compose([
+        transforms.Resize((CNN_INPUT_SIZE, CNN_INPUT_SIZE)),
+        transforms.ToTensor(),
+    ])
+
+    # Case-insensitive extension check — the core fix
+    _valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+    def _is_valid_file(path: str) -> bool:
+        return Path(path).suffix.lower() in _valid_exts
+
+    train_dataset = ImageFolder(root=str(train_dir), transform=transform,
+                                is_valid_file=_is_valid_file)
+    val_dataset   = ImageFolder(root=str(val_dir),   transform=transform,
+                                is_valid_file=_is_valid_file)
+
+    print(f"\n[DEBUG] Train classes : {train_dataset.classes}")
+    print(f"[DEBUG] Val   classes : {val_dataset.classes}")
+    print(f"[DEBUG] Train samples : {len(train_dataset)}")
+    print(f"[DEBUG] Val   samples : {len(val_dataset)}")
+
+    for cls_name, cls_idx in train_dataset.class_to_idx.items():
+        n_train = sum(1 for _, lbl in train_dataset.samples if lbl == cls_idx)
+        n_val   = sum(1 for _, lbl in val_dataset.samples   if lbl == cls_idx)
+        print(f"[DEBUG]   {cls_name:10s} → train={n_train:5d}, val={n_val:5d}")
+
+    if "IDLE" not in train_dataset.classes:
+        raise RuntimeError(
+            f"IDLE class missing from train dataset. "
+            f"Found classes: {train_dataset.classes}. "
+            f"Check folder: {train_dir / 'IDLE'}"
+        )
+    if "DANGER" not in train_dataset.classes:
+        raise RuntimeError(
+            f"DANGER class missing from train dataset. "
+            f"Found classes: {train_dataset.classes}. "
+            f"Check folder: {train_dir / 'DANGER'}"
+        )
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
+
+    print("\n[DEBUG] ✅ CNN dataset loaded successfully\n")
+    return train_loader, val_loader

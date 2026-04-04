@@ -14,7 +14,7 @@ def get_device_info():
     import torch
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
-        mem = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+        mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         return {"type": "cuda", "name": name, "memory_gb": round(mem, 1),
                 "display": f"{name} ({mem:.1f} GB VRAM)"}
     return {"type": "cpu", "name": "CPU", "memory_gb": 0,
@@ -122,10 +122,36 @@ def train_cnn(epochs=None, batch=None, lr=None, progress_callback=None):
     lr = lr or CNN_LR
 
     train_dir = CROPS_DIR / "train"
-    val_dir = CROPS_DIR / "val"
+    val_dir   = CROPS_DIR / "val"
+
+    # ── DEBUG: verify paths and per-class image counts before loading ────────
+    _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+    print("\n" + "="*60)
+    print("[CNN DEBUG] Data path verification")
+    print("="*60)
+    print(f"[CNN DEBUG] CROPS_DIR = {CROPS_DIR}")
+    print(f"[CNN DEBUG] train_dir = {train_dir}  (exists={train_dir.exists()})")
+    print(f"[CNN DEBUG] val_dir   = {val_dir}  (exists={val_dir.exists()})")
+
+    for split_name, split_dir in [("TRAIN", train_dir), ("VAL", val_dir)]:
+        if not split_dir.exists():
+            print(f"[CNN DEBUG] ❌ {split_name} dir MISSING: {split_dir}")
+            continue
+        cls_dirs = sorted(d for d in split_dir.iterdir() if d.is_dir())
+        print(f"[CNN DEBUG] {split_name} class folders found: {[d.name for d in cls_dirs]}")
+        for cls_dir in cls_dirs:
+            n = sum(1 for f in cls_dir.iterdir()
+                    if f.is_file() and f.suffix.lower() in _IMG_EXTS)
+            print(f"[CNN DEBUG]   {split_name}/{cls_dir.name}: {n} images")
+
+    print("="*60 + "\n")
+    # ── END DEBUG ─────────────────────────────────────────────────────────────
 
     if not train_dir.exists():
         return {"success": False, "error": f"Training crops not found at {train_dir}"}
+    if not val_dir.exists():
+        return {"success": False, "error": f"Validation crops not found at {val_dir}"}
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -143,8 +169,52 @@ def train_cnn(epochs=None, batch=None, lr=None, progress_callback=None):
         transforms.ToTensor(),
     ])
 
-    train_dataset = datasets.ImageFolder(str(train_dir), transform=train_transform)
-    val_dataset = datasets.ImageFolder(str(val_dir), transform=val_transform)
+    # ── FIX: case-insensitive is_valid_file ───────────────────────────────────
+    # Older torchvision versions only match lowercase extensions (.jpg not .JPG).
+    # This custom checker fixes "Found no valid file for class IDLE/DANGER"
+    # when crops were saved with uppercase extensions (.JPG, .PNG, etc.).
+    _VALID_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+    def _is_valid_file(path: str) -> bool:
+        return Path(path).suffix.lower() in _VALID_EXTS
+
+    train_dataset = datasets.ImageFolder(
+        str(train_dir),
+        transform=train_transform,
+        is_valid_file=_is_valid_file,
+    )
+    val_dataset = datasets.ImageFolder(
+        str(val_dir),
+        transform=val_transform,
+        is_valid_file=_is_valid_file,
+    )
+    # ── END FIX ───────────────────────────────────────────────────────────────
+
+    # ── DEBUG: confirm what ImageFolder actually loaded ───────────────────────
+    print("\n" + "="*60)
+    print("[CNN DEBUG] ImageFolder load results")
+    print("="*60)
+    print(f"[CNN DEBUG] Loaded classes  : {train_dataset.classes}")
+    print(f"[CNN DEBUG] class_to_idx    : {train_dataset.class_to_idx}")
+    print(f"[CNN DEBUG] Train total     : {len(train_dataset)} samples")
+    print(f"[CNN DEBUG] Val   total     : {len(val_dataset)} samples")
+    for cls_name, cls_idx in train_dataset.class_to_idx.items():
+        n_train = sum(1 for _, lbl in train_dataset.samples if lbl == cls_idx)
+        n_val   = sum(1 for _, lbl in val_dataset.samples   if lbl == cls_idx)
+        print(f"[CNN DEBUG]   {cls_name:10s} → train={n_train:5d}, val={n_val:5d}")
+    print("="*60 + "\n")
+    # ── END DEBUG ─────────────────────────────────────────────────────────────
+
+    # Guard: both expected classes must be present
+    if set(train_dataset.classes) != {"DANGER", "IDLE"}:
+        return {
+            "success": False,
+            "error": (
+                f"Expected classes ['DANGER', 'IDLE'], "
+                f"but ImageFolder found: {train_dataset.classes}. "
+                f"Check folder names inside {train_dir}"
+            ),
+        }
 
     num_classes = len(train_dataset.classes)
     class_names = train_dataset.classes
