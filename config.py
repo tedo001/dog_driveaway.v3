@@ -51,7 +51,7 @@ YOLO_DEVICE = DEVICE
 
 # ── CNN (BehaviorNetV2) Settings ─────────────────────────────────────────────
 CNN_INPUT_SIZE = 128
-CNN_NUM_CLASSES = 4
+CNN_NUM_CLASSES = 2   # Currently trained: DANGER + IDLE  (expand to 4 when ALERT/DOG_FIGHT data is ready)
 CNN_BATCH_SIZE = 16 if DEVICE == "cpu" else 64
 CNN_EPOCHS = 60
 CNN_LR = 0.001
@@ -59,10 +59,11 @@ CNN_PATIENCE = 10
 
 # ── Threat Classes ───────────────────────────────────────────────────────────
 THREAT_CLASSES = {
-    0: "IDLE",
-    1: "ALERT",
-    2: "DANGER",
-    3: "DOG_FIGHT",
+    0: "DANGER",   # alphabetical: DANGER < IDLE  → index 0
+    1: "IDLE",     # alphabetical: IDLE   > DANGER → index 1
+    # Future classes (add folders + retrain to activate):
+    # 2: "ALERT",
+    # 3: "DOG_FIGHT",
 }
 THREAT_COLORS = {
     "IDLE": (0, 255, 0),
