@@ -372,7 +372,7 @@ class DataPage(tk.Frame):
                  bg=BG_CARD, fg=FG_DIM).pack(side="left")
 
         # ── Section 2: Pre-Labeled Roboflow YOLOv8 Data ──
-        sec2 = tk.LabelFrame(container, text="  Pre-Labeled Data (Roboflow YOLOv8 format → direct to YOLO training)  ",
+        sec2 = tk.LabelFrame(container, text="  Pre-Labeled Data (any format → auto-detect → loads for YOLO + CNN)  ",
                               font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=ACCENT,
                               bd=1, relief="groove", padx=10, pady=8)
         sec2.pack(fill="x", pady=5)
@@ -385,8 +385,18 @@ class DataPage(tk.Frame):
                  bg=DARK_RED, fg=FG, insertbackground=FG, width=45).pack(side="left", padx=8, fill="x", expand=True)
         tk.Button(labeled_row, text="Browse", font=("Segoe UI", 9), bg=ACCENT, fg="#fff",
                   bd=0, padx=10, cursor="hand2", command=self._browse_labeled).pack(side="left")
-        tk.Button(labeled_row, text="Load for YOLO", font=("Segoe UI", 9, "bold"), bg=GREEN, fg="#fff",
+        tk.Button(labeled_row, text="Load for Training", font=("Segoe UI", 9, "bold"), bg=GREEN, fg="#fff",
                   bd=0, padx=12, cursor="hand2", command=self._load_labeled).pack(side="left", padx=5)
+
+        # Target model selector
+        target_row = tk.Frame(sec2, bg=BG_CARD)
+        target_row.pack(fill="x", pady=3)
+        tk.Label(target_row, text="Load for:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG).pack(side="left")
+        self.load_target_var = tk.StringVar(value="both")
+        for val, txt in [("both", "YOLO + CNN"), ("yolo", "YOLO only"), ("cnn", "CNN only")]:
+            tk.Radiobutton(target_row, text=txt, variable=self.load_target_var, value=val,
+                           font=("Segoe UI", 9), bg=BG_CARD, fg=FG, selectcolor=DARK_RED,
+                           activebackground=BG_CARD, activeforeground=FG).pack(side="left", padx=8)
 
         # ── Section 3: COCO Download ──
         sec3 = tk.LabelFrame(container, text="  COCO Download  ",
@@ -549,10 +559,13 @@ class DataPage(tk.Frame):
             log_msg(self.log, "REJECTED: Data is not labeled. Need labels/ with .txt files.")
             return
 
+        target = self.load_target_var.get()  # "both", "yolo", or "cnn"
+
         def run():
             try:
                 log_msg(self.log, f"Loading pre-labeled data: {path}")
-                logger.info(f"Loading pre-labeled Roboflow data from {path}")
+                log_msg(self.log, f"Target: {target.upper()}")
+                logger.info(f"Loading pre-labeled data from {path} for {target}")
                 from mlops.data_loader import load_dataset_from_path, copy_for_detection
                 from mlops.preprocessor import auto_select_mapping, extract_behavior_crops
                 from mlops.state import load_state, update_dataset, log_event
@@ -563,31 +576,44 @@ class DataPage(tk.Frame):
                     return
 
                 log_msg(self.log, f"Format: {info['format']} | Classes: {info.get('classes', [])}")
+                state = load_state()
 
-                # Copy directly for YOLO training
-                log_msg(self.log, "Copying to YOLO training directory...")
-                result = copy_for_detection(info, clear_old=True)
-                if result["success"]:
-                    state = load_state()
-                    update_dataset(state, "detection", loaded=True, images=result["total"])
-                    log_event(state, "Labeled Data Loaded", f"{result['total']} images")
-                    log_msg(self.log, f"YOLO data ready: {result['total']} images")
+                # Load for YOLO training
+                if target in ("both", "yolo"):
+                    if info.get("img_dir") and info.get("lbl_dir"):
+                        log_msg(self.log, "Copying to YOLO training directory...")
+                        result = copy_for_detection(info, clear_old=True)
+                        if result["success"]:
+                            update_dataset(state, "detection", loaded=True, images=result["total"])
+                            log_event(state, "Labeled Data Loaded", f"{result['total']} images")
+                            log_msg(self.log, f"YOLO data ready: {result['total']} images")
+                        else:
+                            log_msg(self.log, f"YOLO copy error: {result.get('error')}")
+                    else:
+                        log_msg(self.log, "WARNING: No image/label dirs found for YOLO")
 
-                # Also extract CNN crops if we have class mapping
-                classes = info.get("classes", [])
-                if classes and info.get("img_dir") and info.get("lbl_dir"):
-                    preset_name, mapping = auto_select_mapping(classes)
-                    if mapping:
-                        log_msg(self.log, f"Also extracting CNN crops ({preset_name})...")
-                        crop_result = extract_behavior_crops(
-                            img_dir=info["img_dir"], lbl_dir=info["lbl_dir"],
-                            class_names=classes, class_mapping=mapping, clear_old=True,
-                            all_splits=info.get("all_splits"),
-                        )
-                        if crop_result["success"]:
-                            update_dataset(state, "behavior", loaded=True,
-                                           crops=crop_result["stats"].get("train", {}))
-                            log_msg(self.log, f"CNN crops: {crop_result['total']} extracted")
+                # Load for CNN training (extract behavior crops)
+                if target in ("both", "cnn"):
+                    classes = info.get("classes", [])
+                    if classes and info.get("img_dir") and info.get("lbl_dir"):
+                        preset_name, mapping = auto_select_mapping(classes)
+                        if mapping:
+                            log_msg(self.log, f"Extracting CNN crops ({preset_name})...")
+                            crop_result = extract_behavior_crops(
+                                img_dir=info["img_dir"], lbl_dir=info["lbl_dir"],
+                                class_names=classes, class_mapping=mapping, clear_old=True,
+                                all_splits=info.get("all_splits"),
+                            )
+                            if crop_result["success"]:
+                                update_dataset(state, "behavior", loaded=True,
+                                               crops=crop_result["stats"].get("train", {}))
+                                log_msg(self.log, f"CNN crops: {crop_result['total']} extracted")
+                            else:
+                                log_msg(self.log, f"CNN crop error: {crop_result.get('error')}")
+                        else:
+                            log_msg(self.log, "No class mapping found for CNN. Data loaded for YOLO only.")
+                    else:
+                        log_msg(self.log, "No classes detected for CNN crop extraction.")
 
                 log_msg(self.log, "Pre-labeled data loaded successfully.")
                 logger.info("Pre-labeled data pipeline complete")
