@@ -30,7 +30,7 @@ YOLO_MODEL_PATH = BASE_DIR / "runs" / "detect" / "train6" / "weights" / "best.pt
 CNN_MODEL_PATH  = EXPORT_DIR / "behavior_net_v2.pt"
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
-DATASET_DIR = DATA_DIR / "dataset"
+DATASET_DIR = DATA_DIR / "roboflow_download"
 CROPS_DIR   = DATA_DIR / "crops"
 
 # ── Device Auto-Detection ─────────────────────────────────────────────────────
