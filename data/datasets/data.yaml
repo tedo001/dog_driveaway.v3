@@ -1,0 +1,26 @@
+# data.yaml — Dog Threat Detection — YOLO Dataset Config
+# Matches actual folder structure at: data/dataset/
+#
+#   data/dataset/
+#     train/
+#       images/   ← training images
+#       labels/   ← training labels (.txt)
+#     val/
+#       images/   ← validation images
+#       labels/   ← validation labels (.txt)
+#
+# NOTE: YOLO is already trained (runs/detect/train6/weights/best.pt).
+#       This file is kept for reference / future retraining only.
+#       The app loads best.pt directly and does NOT use this file at runtime.
+
+path: data/dataset          # root relative to project root
+train: train/images         # training images
+val: val/images             # validation images (folder exists as data/dataset/val/)
+
+# Number of classes
+nc: 2
+
+# Class names (COCO IDs used by best.pt: person=0, dog=16)
+names:
+  0: person
+  1: dog

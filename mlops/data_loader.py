@@ -8,7 +8,7 @@ Supports:
 
 Auto-detects:
   - YOLO format (images/ + labels/ with .txt)
-  - Roboflow format (data.yaml with class names)
+  - Roboflow format (coco128.yaml with class names)
   - Custom nested folders (image/ + label/ pairs)
 
 Usage from MLOps app — user just points to a path, everything else is automatic.
@@ -36,7 +36,7 @@ def detect_format(src_dir):
 
     Returns dict with:
       - format: "roboflow_yolo" | "yolo" | "coco" | "custom_nested" | "unknown"
-      - data_yaml: path to data.yaml if found
+      - data_yaml: path to coco128.yaml if found
       - classes: list of class names if detected
       - img_dir: path to images directory
       - lbl_dir: path to labels directory
@@ -44,9 +44,9 @@ def detect_format(src_dir):
     src = Path(src_dir)
     result = {"format": "unknown", "data_yaml": None, "classes": [], "img_dir": None, "lbl_dir": None, "all_splits": []}
 
-    # Check for data.yaml (Roboflow / YOLO format)
+    # Check for coco128.yaml (Roboflow / YOLO format)
     yaml_path = None
-    for candidate in [src / "data.yaml", src / "data.yml"]:
+    for candidate in [src / "coco128.yaml", src / "data.yml"]:
         if candidate.exists():
             yaml_path = candidate
             break
@@ -113,7 +113,7 @@ def detect_format(src_dir):
 
 
 def _parse_yaml_classes(yaml_path):
-    """Parse class names from data.yaml without requiring PyYAML."""
+    """Parse class names from coco128.yaml without requiring PyYAML."""
     classes = []
     text = yaml_path.read_text()
     for line in text.split("\n"):
@@ -302,7 +302,7 @@ def download_coco(max_images=5000, train_split=0.8):
     Download COCO 2017 dog+person subset directly.
 
     Downloads annotations, filters dog/person images, downloads those images,
-    creates YOLO labels and data.yaml.
+    creates YOLO labels and coco128.yaml.
     """
     import json
     import zipfile
@@ -400,8 +400,8 @@ def download_coco(max_images=5000, train_split=0.8):
                 if lines:
                     dst_lbl.write_text("\n".join(lines))
 
-        # Step 4: Create data.yaml
-        (DATASET_DIR / "data.yaml").write_text(
+        # Step 4: Create coco128.yaml
+        (DATASET_DIR / "coco128.yaml").write_text(
             f"train: {DATASET_DIR / 'train' / 'images'}\n"
             f"val: {DATASET_DIR / 'valid' / 'images'}\n\n"
             f"nc: 2\nnames: ['dog', 'person']\n"
@@ -464,7 +464,7 @@ def copy_for_detection(src_info, clear_old=True):
         shutil.copy2(lbl_path, dst_lbl_dir / lbl_path.name)
         copied += 1
 
-    # Create data.yaml
+    # Create coco128.yaml
     nc = len(src_info.get("classes", [])) or 2
     names = src_info.get("classes", []) or ["dog", "person"]
     yaml_content = (
@@ -473,7 +473,7 @@ def copy_for_detection(src_info, clear_old=True):
         f"nc: {nc}\n"
         f"names: {names}\n"
     )
-    (DATASET_DIR / "data.yaml").write_text(yaml_content)
+    (DATASET_DIR / "coco128.yaml").write_text(yaml_content)
 
     print(f"\n  Copied {copied} image-label pairs to {DATASET_DIR}")
     print(f"  Train: {split} | Val: {copied - split}")

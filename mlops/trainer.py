@@ -58,9 +58,9 @@ def train_yolo(epochs=None, batch=None, imgsz=None, progress_callback=None):
     batch = batch or YOLO_BATCH
     imgsz = imgsz or YOLO_IMGSZ
 
-    data_yaml = DATASET_DIR / "data.yaml"
+    data_yaml = DATASET_DIR / "coco128.yaml"
     if not data_yaml.exists():
-        return {"success": False, "error": f"data.yaml not found at {data_yaml}"}
+        return {"success": False, "error": f"coco128.yaml not found at {data_yaml}"}
 
     model = YOLO(YOLO_BASE_MODEL)
 

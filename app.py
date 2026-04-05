@@ -276,7 +276,7 @@ class DashboardPage(tk.Frame):
         data_card = self._card("Data")
         try:
             from config import DATASET_DIR, CROPS_DIR
-            det_ok = (DATASET_DIR / "data.yaml").exists()
+            det_ok = (DATASET_DIR / "coco128.yaml").exists()
             crops_ok = (CROPS_DIR / "train").exists()
             self._row(data_card, "Detection Data",
                       "Loaded" if det_ok else "Not loaded",
@@ -1059,25 +1059,23 @@ class DetectionPage(tk.Frame):
                 cv2.destroyAllWindows()
 
             elif mode in ("live", "hardware"):
-                # ── YOLO → CNN → ThreatEngine pipeline ───────────────────
+                # ── YOLO → CNN → Decision pipeline ───────────────────────
+                # Rules:
+                #   DANGER dog + human in frame → fire ultrasonic
+                #   DANGER dog + no human       → no trigger (dog vs dog)
+                #   IDLE dog                    → no trigger
                 from models.live_detector import LiveDetector
-                from audio.audio_detector import AudioDetector
-                from audio.audio_combiner import AudioCombiner
                 from utils.ui import UIRenderer
                 from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
 
-                # LiveDetector owns YOLO + CNN + ThreatEngine + proximity check
                 live = LiveDetector()
                 status = live.status()
                 log_msg(self.log, f"YOLO: {status['yolo_model']}")
-                log_msg(self.log, f"CNN:  {'loaded - ' + str(status['cnn_classes']) if status['cnn_loaded'] else 'NOT LOADED - train CNN first!'}")
-
+                log_msg(self.log,
+                    f"CNN: {'loaded — classes: ' + str(status['cnn_classes']) if status['cnn_loaded'] else 'NOT LOADED — train CNN first!'}")
                 if not status["cnn_loaded"]:
-                    log_msg(self.log, "WARNING: Running without CNN — all dogs will show as IDLE")
+                    log_msg(self.log, "WARNING: CNN missing — all dogs will show as IDLE")
 
-                audio_detector = AudioDetector()
-                audio_combiner = AudioCombiner()
-                audio_detector.start()
                 ui = UIRenderer()
 
                 if mode == "hardware":
@@ -1098,6 +1096,8 @@ class DetectionPage(tk.Frame):
                     return
 
                 frame_n = 0
+                audio_state = {"bark": False, "growl": False, "scream": False, "level": 0.0}
+
                 try:
                     while True:
                         ret, frame = cap.read()
@@ -1107,53 +1107,30 @@ class DetectionPage(tk.Frame):
 
                         frame_n += 1
 
-                        # Audio state
-                        raw_audio = audio_detector.get_state()
-                        audio_combiner.update(raw_audio)
+                        # ── YOLO detects → CNN classifies → decision ──────
+                        result = live.process(frame)
 
-                        # ── Full YOLO → CNN → Engine pipeline in one call ──
-                        result = live.process(frame, audio_state=None)
-
-                        # Recalculate audio_state now we know dog/human counts
-                        audio_state = audio_combiner.get_combined_state(
-                            result["num_dogs"], result["num_humans"]
-                        )
-                        # Re-run engine with real audio (proximity/cooldown already done)
-                        from models.threat_engine import ThreatEngine as _TE
-                        _eng_result = _TE.__new__(_TE)  # reuse stored engine
-                        result_audio = live.engine.evaluate(
-                            cnn_results=result["cnn_results"],
-                            num_dogs=result["num_dogs"],
-                            num_humans=result["num_humans"],
-                            audio_state=audio_state,
-                        )
-                        # Only upgrade trigger, never downgrade proximity check
-                        if result_audio["trigger_ultrasonic"] and result["dog_near_human"]:
-                            result["trigger_ultrasonic"] = True
-                            result["threat_label"]       = result_audio["threat_label"]
-                            result["confidence"]         = result_audio["confidence"]
-                            result["reason"]             = result_audio["reason"]
-
-                        # Fire ultrasonic
+                        # ── Fire ultrasonic if triggered ──────────────────
                         if result["trigger_ultrasonic"]:
                             ultrasonic.trigger()
 
-                        # Log every 30 frames
+                        # ── Log every 30 frames ───────────────────────────
                         if frame_n % 30 == 0:
+                            nd     = result["num_dogs"]
+                            nh     = result["num_humans"]
                             threat = result["threat_label"]
                             conf   = result["confidence"]
-                            nd, nh = result["num_dogs"], result["num_humans"]
+                            reason = result["reason"]
                             log_msg(self.log,
                                 f"Frame {frame_n} | Dogs:{nd} Humans:{nh} | {threat} ({conf:.0%})")
                             logger.info(
                                 f"Live {frame_n}: dogs={nd} humans={nh} "
-                                f"threat={threat} reason={result['reason']}")
-
+                                f"threat={threat} reason={reason}")
                             if result["trigger_ultrasonic"]:
-                                log_msg(self.log, ">>> ULTRASONIC TRIGGERED <<<")
-                                logger.warning(f"Ultrasonic triggered: {threat}")
+                                log_msg(self.log, f">>> ULTRASONIC TRIGGERED — {reason} <<<")
+                                logger.warning(f"Ultrasonic triggered: {reason}")
 
-                        # Render frame
+                        # ── Render ────────────────────────────────────────
                         frame = ui.render(
                             frame, result["detections"],
                             result["threat_label"], result["confidence"],
@@ -1163,7 +1140,6 @@ class DetectionPage(tk.Frame):
                         if key == ord("q"):
                             break
                 finally:
-                    audio_detector.stop()
                     cap.release()
                     ui.cleanup()
                     if mode == "hardware":

@@ -23,7 +23,10 @@ DATA_DIR   = BASE_DIR / "data"
 EXPORT_DIR = BASE_DIR / "export"
 LOG_DIR    = BASE_DIR / "logs"
 
-YOLO_MODEL_PATH = EXPORT_DIR / "dog_detector.pt"
+# ── YOLO: use the already-trained weights; do NOT retrain ─────────────────────
+# Trained via coco128.yaml — weights live at runs/detect/train6/weights/best.pt
+YOLO_MODEL_PATH = BASE_DIR / "runs" / "detect" / "train6" / "weights" / "best.pt"
+
 CNN_MODEL_PATH  = EXPORT_DIR / "behavior_net_v2.pt"
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -42,11 +45,9 @@ else:
     DEVICE_VRAM_GB = 0
 
 # ── YOLOv8 (ultralytics) Settings ────────────────────────────────────────────
-# Load your model:
-#   from ultralytics import YOLO
-#   model = YOLO(str(YOLO_MODEL_PATH))   ← custom trained
-#   model = YOLO(YOLO_BASE_MODEL)        ← pretrained fallback
-YOLO_BASE_MODEL     = "yolov8n.pt"       # nano=fast  |  yolov8s/m/l = more accurate
+# The model is LOADED (not trained) from YOLO_MODEL_PATH above.
+# YOLO_BASE_MODEL is only used as a fallback if YOLO_MODEL_PATH is missing.
+YOLO_BASE_MODEL     = "yolov8n.pt"   # nano=fast  |  yolov8s/m/l = more accurate
 YOLO_IMGSZ          = 640 if DEVICE != "cpu" else 416
 YOLO_EPOCHS         = 60
 YOLO_BATCH          = 16 if DEVICE != "cpu" else 4
@@ -54,8 +55,7 @@ YOLO_CONF_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD  = 0.45
 YOLO_DEVICE         = DEVICE
 
-# COCO class indices for the pretrained base model
-# (your custom dog_detector.pt uses its own class ids — check its yaml)
+# COCO class indices (best.pt was trained on coco128 which uses standard COCO ids)
 YOLO_CLASS_PERSON = 0    # COCO "person"
 YOLO_CLASS_DOG    = 16   # COCO "dog"
 YOLO_CLASSES      = [YOLO_CLASS_PERSON, YOLO_CLASS_DOG]   # only detect these two
