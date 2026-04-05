@@ -1,0 +1,8 @@
+path: D:/Pycharm/dog_driveaway.v3/data/datasets/coco128
+
+train: images/train2017
+val: images/train2017
+
+names:
+  0: person
+  1: dog
