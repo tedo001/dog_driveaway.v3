@@ -150,7 +150,7 @@ class DualYOLODetector:
 
     def get_dog_crops(self, frame, detections=None):
         """
-        Extract dog image crops from frame for CNN classification.
+        Extract DOG image crops from frame for CNN behavior classification.
         Returns list of (crop_image, bbox) tuples.
         """
         if detections is None:
@@ -158,7 +158,7 @@ class DualYOLODetector:
         crops = []
         h, w = frame.shape[:2]
         for det in detections:
-            if det["class"] != "person":
+            if det["class"] != "dog":   # ← FIXED: crop dogs, not persons
                 continue
             x1, y1, x2, y2 = [int(c) for c in det["bbox"]]
             x1, y1 = max(0, x1), max(0, y1)

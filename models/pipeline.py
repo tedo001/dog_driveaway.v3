@@ -58,8 +58,20 @@ class DetectionPipeline:
         }
 
     def _fuse_spatial_with_cnn(self, cnn_results, spatial):
+        """
+        Fuse spatial proximity data with CNN predictions.
+        Uses label strings — works with 2-class and future 4-class CNN.
+        """
         if not cnn_results or not spatial["dog_human_pairs"]:
             return cnn_results
+
+        from config import THREAT_CLASSES
+
+        def _class_for(label):
+            for idx, lbl in THREAT_CLASSES.items():
+                if lbl == label:
+                    return idx
+            return max(THREAT_CLASSES.keys())
 
         fused = []
         pairs = spatial["dog_human_pairs"]
@@ -69,22 +81,30 @@ class DetectionPipeline:
 
             if pair:
                 threat_score = pair["threat_score"]
-                distance = pair["distance"]
-                approaching = pair["approach_speed"] < -2.0
+                distance     = pair["distance"]
+                approaching  = pair["approach_speed"] < -2.0
 
                 if distance < self.spatial.danger_distance and approaching:
-                    if tc < 2:
-                        tc = 2
-                        tl = "DANGER"
-                        conf = max(conf, 0.80 + threat_score * 0.15)
+                    # Upgrade to DANGER if spatially threatening
+                    tc   = _class_for("DANGER")
+                    tl   = "DANGER"
+                    conf = max(conf, 0.80 + threat_score * 0.15)
+
                 elif distance < self.spatial.alert_distance and approaching:
-                    if tc < 1:
-                        tc = 1
-                        tl = "ALERT"
+                    # Upgrade to ALERT if approaching but not yet danger-close
+                    if tl == "IDLE":
+                        tc   = _class_for("ALERT") if "ALERT" in THREAT_CLASSES.values() else tc
+                        tl   = "ALERT" if "ALERT" in THREAT_CLASSES.values() else tl
                         conf = max(conf, 0.65 + threat_score * 0.2)
-                elif tc == 2 and distance > self.spatial.alert_distance * 1.5:
-                    tc = 1
-                    tl = "ALERT"
+
+                elif tl == "DANGER" and distance > self.spatial.alert_distance * 1.5:
+                    # Downgrade DANGER if dog has moved far away
+                    if "ALERT" in THREAT_CLASSES.values():
+                        tc   = _class_for("ALERT")
+                        tl   = "ALERT"
+                    else:
+                        tc   = _class_for("IDLE")
+                        tl   = "IDLE"
                     conf *= 0.7
 
             fused.append((tc, tl, min(conf, 1.0)))
