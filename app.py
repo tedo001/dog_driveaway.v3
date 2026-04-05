@@ -1059,17 +1059,22 @@ class DetectionPage(tk.Frame):
                 cv2.destroyAllWindows()
 
             elif mode in ("live", "hardware"):
-                from models.behavior_net_v2 import BehaviorClassifierV2
-                from models.yolo_model import DualYOLODetector
-                from models.threat_engine import ThreatEngine
+                # ── YOLO → CNN → ThreatEngine pipeline ───────────────────
+                from models.live_detector import LiveDetector
                 from audio.audio_detector import AudioDetector
                 from audio.audio_combiner import AudioCombiner
                 from utils.ui import UIRenderer
                 from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT
 
-                detector = DualYOLODetector()
-                cnn = BehaviorClassifierV2()
-                engine = ThreatEngine()
+                # LiveDetector owns YOLO + CNN + ThreatEngine + proximity check
+                live = LiveDetector()
+                status = live.status()
+                log_msg(self.log, f"YOLO: {status['yolo_model']}")
+                log_msg(self.log, f"CNN:  {'loaded - ' + str(status['cnn_classes']) if status['cnn_loaded'] else 'NOT LOADED - train CNN first!'}")
+
+                if not status["cnn_loaded"]:
+                    log_msg(self.log, "WARNING: Running without CNN — all dogs will show as IDLE")
+
                 audio_detector = AudioDetector()
                 audio_combiner = AudioCombiner()
                 audio_detector.start()
@@ -1101,40 +1106,59 @@ class DetectionPage(tk.Frame):
                             continue
 
                         frame_n += 1
-                        detections = detector.detect(frame)
-                        num_dogs = sum(1 for d in detections if d["class"] == "dog")
-                        num_humans = sum(1 for d in detections if d["class"] == "person")
 
-                        cnn_results = []
-                        if num_dogs > 0:
-                            dog_crops = detector.get_dog_crops(frame, detections)
-                            for crop, bbox in dog_crops:
-                                cnn_results.append(cnn.classify(crop))
-
+                        # Audio state
                         raw_audio = audio_detector.get_state()
                         audio_combiner.update(raw_audio)
-                        audio_state = audio_combiner.get_combined_state(num_dogs, num_humans)
 
-                        result = engine.evaluate(
-                            cnn_results=cnn_results, num_dogs=num_dogs,
-                            num_humans=num_humans, audio_state=audio_state)
+                        # ── Full YOLO → CNN → Engine pipeline in one call ──
+                        result = live.process(frame, audio_state=None)
 
+                        # Recalculate audio_state now we know dog/human counts
+                        audio_state = audio_combiner.get_combined_state(
+                            result["num_dogs"], result["num_humans"]
+                        )
+                        # Re-run engine with real audio (proximity/cooldown already done)
+                        from models.threat_engine import ThreatEngine as _TE
+                        _eng_result = _TE.__new__(_TE)  # reuse stored engine
+                        result_audio = live.engine.evaluate(
+                            cnn_results=result["cnn_results"],
+                            num_dogs=result["num_dogs"],
+                            num_humans=result["num_humans"],
+                            audio_state=audio_state,
+                        )
+                        # Only upgrade trigger, never downgrade proximity check
+                        if result_audio["trigger_ultrasonic"] and result["dog_near_human"]:
+                            result["trigger_ultrasonic"] = True
+                            result["threat_label"]       = result_audio["threat_label"]
+                            result["confidence"]         = result_audio["confidence"]
+                            result["reason"]             = result_audio["reason"]
+
+                        # Fire ultrasonic
                         if result["trigger_ultrasonic"]:
                             ultrasonic.trigger()
 
-                        # Log periodically
+                        # Log every 30 frames
                         if frame_n % 30 == 0:
-                            threat = result.get("threat_label", "NONE")
-                            conf = result.get("confidence", 0)
-                            log_msg(self.log, f"Frame {frame_n} | Dogs:{num_dogs} Humans:{num_humans} | {threat} ({conf:.2f})")
-                            logger.info(f"Live {frame_n}: dogs={num_dogs} humans={num_humans} threat={threat}")
+                            threat = result["threat_label"]
+                            conf   = result["confidence"]
+                            nd, nh = result["num_dogs"], result["num_humans"]
+                            log_msg(self.log,
+                                f"Frame {frame_n} | Dogs:{nd} Humans:{nh} | {threat} ({conf:.0%})")
+                            logger.info(
+                                f"Live {frame_n}: dogs={nd} humans={nh} "
+                                f"threat={threat} reason={result['reason']}")
 
                             if result["trigger_ultrasonic"]:
                                 log_msg(self.log, ">>> ULTRASONIC TRIGGERED <<<")
                                 logger.warning(f"Ultrasonic triggered: {threat}")
 
-                        frame = ui.render(frame, detections, result["threat_label"],
-                                          result["confidence"], audio_state)
+                        # Render frame
+                        frame = ui.render(
+                            frame, result["detections"],
+                            result["threat_label"], result["confidence"],
+                            audio_state,
+                        )
                         key = ui.show(frame)
                         if key == ord("q"):
                             break
