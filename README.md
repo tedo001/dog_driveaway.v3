@@ -47,13 +47,13 @@ models/
   spatial_analyzer.py   ← Dog-human distance tracking
   threat_engine.py      ← 5 safety rules → final decision
   pipeline.py           ← Connects all models
-
+|
 mlops/
   data_loader.py        ← Load any dataset (ZIP/folder/COCO)
   preprocessor.py       ← Auto class mapping + crop extraction
   trainer.py            ← Train YOLO + CNN
   state.py              ← Pipeline state tracking
-
+|
 simulation/             ← Animated test scenarios (no camera needed)
 audio/                  ← Bark/growl detection + ultrasonic output
 hardware/               ← Arduino serial bridge
