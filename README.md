@@ -14,7 +14,7 @@ Double-click `run.bat` (Windows) or `./run.sh` (Linux).
 ## How It Works
 
 ```
-Camera Frame → YOLO (dog+person) → Spatial Analysis → CNN Behavior → Threat Engine
+Camera Frame → YOLOv8n (dog+person) → Spatial Analysis → CNN Behavior → Threat Engine
                                                                           ↓
                                                           DANGER + human → ULTRASONIC
 ```
