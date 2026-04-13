@@ -551,14 +551,6 @@ class DataPage(tk.Frame):
             messagebox.showwarning("No path", "Select a pre-labeled data folder.")
             return
 
-        if not self._validate_labeled(path):
-            messagebox.showerror("Not Labeled",
-                "This data does not appear to be labeled.\n"
-                "Expected: images + labels folders with .txt files.\n\n"
-                "Unlabeled data is rejected. Please use labeled data.")
-            log_msg(self.log, "REJECTED: Data is not labeled. Need labels/ with .txt files.")
-            return
-
         target = self.load_target_var.get()  # "both", "yolo", or "cnn"
 
         def run():
@@ -566,7 +558,7 @@ class DataPage(tk.Frame):
                 log_msg(self.log, f"Loading pre-labeled data: {path}")
                 log_msg(self.log, f"Target: {target.upper()}")
                 logger.info(f"Loading pre-labeled data from {path} for {target}")
-                from mlops.data_loader import load_dataset_from_path, copy_for_detection
+                from mlops.data_loader import load_dataset_from_path, copy_for_detection, copy_imagefolder_to_crops
                 from mlops.preprocessor import auto_select_mapping, extract_behavior_crops
                 from mlops.state import load_state, update_dataset, log_event
 
@@ -575,8 +567,53 @@ class DataPage(tk.Frame):
                     log_msg(self.log, f"ERROR: {info.get('error')}")
                     return
 
-                log_msg(self.log, f"Format: {info['format']} | Classes: {info.get('classes', [])}")
+                fmt = info["format"]
+                classes = info.get("classes", [])
+                log_msg(self.log, f"Format: {fmt} | Classes: {classes}")
                 state = load_state()
+
+                # ── ImageFolder format (train/CLASS/*.jpg) → direct to CNN crops ──
+                if fmt == "imagefolder":
+                    log_msg(self.log, "Detected ImageFolder format (class subfolders).")
+
+                    if target in ("both", "cnn"):
+                        # Auto-map classes if possible
+                        preset_name, mapping = auto_select_mapping(classes)
+                        if mapping:
+                            log_msg(self.log, f"Auto-mapping: {preset_name}")
+                            for src_cls, dst_cls in mapping.items():
+                                log_msg(self.log, f"  {src_cls} -> {dst_cls}")
+                        else:
+                            mapping = None
+                            log_msg(self.log, "No mapping needed. Using class names as-is.")
+
+                        log_msg(self.log, "Copying to CNN training crops...")
+                        result = copy_imagefolder_to_crops(path, class_mapping=mapping, clear_old=True)
+                        if result["success"]:
+                            update_dataset(state, "behavior", loaded=True, crops=result.get("stats", {}))
+                            log_event(state, "CNN Data Loaded", f"{result['total']} images")
+                            log_msg(self.log, f"CNN crops ready: {result['total']} images")
+                            for k, v in sorted(result.get("stats", {}).items()):
+                                log_msg(self.log, f"  {k}: {v}")
+                        else:
+                            log_msg(self.log, f"ERROR: {result.get('error')}")
+
+                    if target in ("both", "yolo"):
+                        log_msg(self.log, "NOTE: ImageFolder data is for CNN only, not YOLO.")
+                        log_msg(self.log, "For YOLO, use YOLO-format data with images/ + labels/")
+
+                    log_msg(self.log, "ImageFolder data loaded successfully.")
+                    logger.info("ImageFolder data pipeline complete")
+                    return
+
+                # ── YOLO format (images + labels) ──
+                # Validate labels exist for YOLO format
+                if not self._validate_labeled(path):
+                    log_msg(self.log, "WARNING: No YOLO labels found (labels/*.txt).")
+                    if target in ("yolo", "both"):
+                        log_msg(self.log, "Cannot load for YOLO without label files.")
+                        if target == "yolo":
+                            return
 
                 # Load for YOLO training
                 if target in ("both", "yolo"):
@@ -590,11 +627,10 @@ class DataPage(tk.Frame):
                         else:
                             log_msg(self.log, f"YOLO copy error: {result.get('error')}")
                     else:
-                        log_msg(self.log, "WARNING: No image/label dirs found for YOLO")
+                        log_msg(self.log, "No image/label dirs found for YOLO.")
 
-                # Load for CNN training (extract behavior crops)
+                # Load for CNN training (extract behavior crops from YOLO labels)
                 if target in ("both", "cnn"):
-                    classes = info.get("classes", [])
                     if classes and info.get("img_dir") and info.get("lbl_dir"):
                         preset_name, mapping = auto_select_mapping(classes)
                         if mapping:
@@ -611,9 +647,9 @@ class DataPage(tk.Frame):
                             else:
                                 log_msg(self.log, f"CNN crop error: {crop_result.get('error')}")
                         else:
-                            log_msg(self.log, "No class mapping found for CNN. Data loaded for YOLO only.")
+                            log_msg(self.log, "No class mapping found for CNN crops.")
                     else:
-                        log_msg(self.log, "No classes detected for CNN crop extraction.")
+                        log_msg(self.log, "No classes/labels for CNN crop extraction.")
 
                 log_msg(self.log, "Pre-labeled data loaded successfully.")
                 logger.info("Pre-labeled data pipeline complete")
@@ -651,6 +687,68 @@ class DataPage(tk.Frame):
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _parse_roboflow_input(self, raw_input):
+        """
+        Parse various Roboflow input formats:
+          - Full URL: https://app.roboflow.com/workspace/project/version
+          - Full URL: https://universe.roboflow.com/workspace/project/dataset/version
+          - Short: workspace/project/version
+          - Project only: project/version  (uses saved workspace)
+          - Just project name: project  (uses saved workspace, version=1)
+        Returns (workspace, project, version) or None on failure.
+        """
+        cfg = load_admin_config()
+        saved_workspace = cfg.get("roboflow_workspace", "").strip()
+
+        text = raw_input.strip().strip("/")
+
+        # Strip common URL prefixes
+        for prefix in ["https://app.roboflow.com/", "https://universe.roboflow.com/",
+                        "http://app.roboflow.com/", "http://universe.roboflow.com/"]:
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):]
+                break
+
+        # Remove trailing format params like ?format=yolov8
+        if "?" in text:
+            text = text.split("?")[0]
+
+        parts = [p for p in text.split("/") if p and p.lower() not in ("dataset", "model")]
+
+        workspace = project_name = None
+        version = 1
+
+        if len(parts) >= 3:
+            workspace = parts[0]
+            project_name = parts[1]
+            try:
+                version = int(parts[2])
+            except ValueError:
+                version = 1
+        elif len(parts) == 2:
+            # Could be workspace/project or project/version
+            try:
+                version = int(parts[1])
+                # parts[1] is numeric — it's project/version
+                workspace = saved_workspace
+                project_name = parts[0]
+            except ValueError:
+                # parts[1] is not numeric — it's workspace/project
+                workspace = parts[0]
+                project_name = parts[1]
+                version = 1
+        elif len(parts) == 1:
+            workspace = saved_workspace
+            project_name = parts[0]
+            version = 1
+        else:
+            return None
+
+        if not workspace:
+            return None
+
+        return workspace, project_name, version
+
     def _download_roboflow(self):
         url = self.rf_url_var.get().strip()
         fmt = self.rf_format_var.get()
@@ -662,41 +760,49 @@ class DataPage(tk.Frame):
                 "Roboflow API key not set.\nGo to Admin tab to set it.")
             return
         if not url:
-            messagebox.showwarning("No URL", "Enter a Roboflow dataset URL or ID.")
+            messagebox.showwarning("No URL",
+                "Enter a Roboflow dataset URL.\n\n"
+                "Examples:\n"
+                "  workspace/project/1\n"
+                "  https://app.roboflow.com/workspace/project/1\n"
+                "  project/1  (uses saved workspace)")
             return
+
+        parsed = self._parse_roboflow_input(url)
+        if not parsed:
+            messagebox.showerror("Bad URL",
+                "Could not parse Roboflow URL.\n\n"
+                "Make sure workspace is set in Admin tab,\n"
+                "or use full format: workspace/project/version")
+            return
+
+        workspace, project_name, version = parsed
 
         def run():
             try:
-                log_msg(self.log, f"Downloading from Roboflow ({fmt})...")
-                logger.info(f"Roboflow download: {url} format={fmt}")
+                log_msg(self.log, f"Roboflow: {workspace}/{project_name} v{version} ({fmt})")
+                logger.info(f"Roboflow download: {workspace}/{project_name}/{version} format={fmt}")
 
-                from roboflow import Roboflow
-                rf = Roboflow(api_key=api_key)
-
-                # Parse URL: workspace/project/version
-                parts = url.strip("/").split("/")
-                if len(parts) >= 3:
-                    workspace = parts[-3] if len(parts) >= 3 else parts[0]
-                    project_name = parts[-2]
-                    version = int(parts[-1])
-                elif len(parts) == 2:
-                    workspace = cfg.get("roboflow_workspace", parts[0])
-                    project_name = parts[0]
-                    version = int(parts[1])
-                else:
-                    log_msg(self.log, "ERROR: URL format should be workspace/project/version")
+                try:
+                    from roboflow import Roboflow
+                except ImportError:
+                    log_msg(self.log, "ERROR: roboflow package not installed.")
+                    log_msg(self.log, "Run: pip install roboflow")
                     return
 
+                rf = Roboflow(api_key=api_key)
+                log_msg(self.log, "Connected to Roboflow API...")
+
                 project = rf.workspace(workspace).project(project_name)
-                dataset = project.version(version).download(fmt,
-                    location=str(PROJECT_ROOT / "data" / "roboflow_download"))
+                log_msg(self.log, f"Found project: {project_name}")
+
+                download_path = str(PROJECT_ROOT / "data" / "roboflow_download")
+                dataset = project.version(version).download(fmt, location=download_path)
 
                 log_msg(self.log, f"Downloaded to: {dataset.location}")
-                log_msg(self.log, "Now load it using the 'Pre-Labeled Data' section above.")
+                log_msg(self.log, "Load it using 'Pre-Labeled Data' section above.")
                 logger.info(f"Roboflow download complete: {dataset.location}")
 
-            except ImportError:
-                log_msg(self.log, "ERROR: pip install roboflow  (package not installed)")
             except Exception as e:
                 log_msg(self.log, f"ERROR: {e}")
                 logger.error(f"Roboflow download error: {e}")
@@ -923,6 +1029,7 @@ class DetectionPage(tk.Frame):
         super().__init__(parent, bg=BG)
         self.app = app
         self.running = False
+        self.stop_flag = False
 
         tk.Label(self, text="Run Detection", font=("Segoe UI", 20, "bold"),
                  bg=BG, fg=FG).pack(anchor="w", padx=30, pady=(20, 5))
@@ -930,6 +1037,7 @@ class DetectionPage(tk.Frame):
                  font=("Segoe UI", 10), bg=BG, fg=FG_DIM).pack(anchor="w", padx=30, pady=(0, 10))
 
         # Mode cards
+        self.start_buttons = []
         modes = [
             ("Simulation", "No camera needed - animated test scenarios.\n"
              "Controls: 1-6 switch scenario, SPACE pause, Q quit.", GREEN, self._run_simulation),
@@ -949,29 +1057,56 @@ class DetectionPage(tk.Frame):
             tk.Label(header, text=title, font=("Segoe UI", 13, "bold"),
                      bg=BG_CARD, fg=color).pack(side="left")
 
-            tk.Button(header, text="START", font=("Segoe UI", 10, "bold"),
+            start_btn = tk.Button(header, text="START", font=("Segoe UI", 10, "bold"),
                       bg=color, fg="#fff", bd=0, padx=20, pady=5, cursor="hand2",
-                      command=cmd).pack(side="right")
+                      command=cmd)
+            start_btn.pack(side="right")
+            self.start_buttons.append(start_btn)
 
             tk.Label(card, text=desc, font=("Segoe UI", 9),
                      bg=BG_CARD, fg=FG_DIM, justify="left").pack(anchor="w", pady=(5, 0))
 
+        # STOP button
+        stop_frame = tk.Frame(self, bg=BG)
+        stop_frame.pack(fill="x", padx=30, pady=(8, 0))
+
+        self.stop_btn = tk.Button(stop_frame, text="STOP DETECTION", font=("Segoe UI", 12, "bold"),
+                                   bg=RED, fg="#fff", bd=0, padx=30, pady=10, cursor="hand2",
+                                   state="disabled", command=self._stop_detection)
+        self.stop_btn.pack(side="left")
+
+        self.status_label = tk.Label(stop_frame, text="", font=("Segoe UI", 10),
+                                      bg=BG, fg=YELLOW)
+        self.status_label.pack(side="left", padx=15)
+
         # Runtime log
         tk.Label(self, text="Runtime Log", font=("Segoe UI", 10, "bold"),
-                 bg=BG, fg=ACCENT).pack(anchor="w", padx=30, pady=(10, 0))
+                 bg=BG, fg=ACCENT).pack(anchor="w", padx=30, pady=(8, 0))
         self.log = make_log(self)
         self.log.configure(height=8)
         self.log.pack(fill="both", expand=True, padx=30, pady=(2, 15))
 
-        self.status_label = tk.Label(self, text="", font=("Segoe UI", 10),
-                                      bg=BG, fg=YELLOW)
-        self.status_label.pack(anchor="w", padx=30, pady=(0, 10))
+    def _set_running(self, is_running):
+        self.running = is_running
+        self.stop_flag = False
+        state_start = "disabled" if is_running else "normal"
+        state_stop = "normal" if is_running else "disabled"
+        for btn in self.start_buttons:
+            btn.configure(state=state_start)
+        self.stop_btn.configure(state=state_stop,
+                                 bg=RED if is_running else FG_DIM)
+
+    def _stop_detection(self):
+        self.stop_flag = True
+        self.status_label.configure(text="Stopping... (close CV2 window or press Q)")
+        log_msg(self.log, "Stop requested. Close the detection window (Q) to stop.")
+        logger.info("Detection stop requested")
 
     def _run_simulation(self):
         if self.running:
             return
-        self.running = True
-        self.status_label.configure(text="Starting simulation...")
+        self._set_running(True)
+        self.status_label.configure(text="Running simulation...")
         log_msg(self.log, "Starting simulation mode...")
         logger.info("Detection: simulation started")
         threading.Thread(target=self._run_detection_mode, args=("simulation",), daemon=True).start()
@@ -983,8 +1118,8 @@ class DetectionPage(tk.Frame):
         if not YOLO_MODEL_PATH.exists():
             messagebox.showwarning("No Model", "YOLO model not trained yet.\nGo to Training tab first.")
             return
-        self.running = True
-        self.status_label.configure(text="Starting live detection...")
+        self._set_running(True)
+        self.status_label.configure(text="Running live detection...")
         log_msg(self.log, "Starting live camera mode...")
         logger.info("Detection: live mode started")
         threading.Thread(target=self._run_detection_mode, args=("live",), daemon=True).start()
@@ -996,8 +1131,8 @@ class DetectionPage(tk.Frame):
         if not YOLO_MODEL_PATH.exists():
             messagebox.showwarning("No Model", "YOLO model not trained yet.\nGo to Training tab first.")
             return
-        self.running = True
-        self.status_label.configure(text="Starting hardware mode...")
+        self._set_running(True)
+        self.status_label.configure(text="Running hardware mode...")
         log_msg(self.log, "Starting hardware mode...")
         logger.info("Detection: hardware mode started")
         threading.Thread(target=self._run_detection_mode, args=("hardware",), daemon=True).start()
@@ -1041,7 +1176,7 @@ class DetectionPage(tk.Frame):
                     cv2.imshow(WINDOW_NAME, canvas)
 
                     key = cv2.waitKey(1) & 0xFF
-                    if key == ord("q"):
+                    if key == ord("q") or self.stop_flag:
                         break
                     elif key == ord(" "):
                         sim.paused = not sim.paused
@@ -1137,7 +1272,7 @@ class DetectionPage(tk.Frame):
                             audio_state,
                         )
                         key = ui.show(frame)
-                        if key == ord("q"):
+                        if key == ord("q") or self.stop_flag:
                             break
                 finally:
                     cap.release()
@@ -1153,7 +1288,8 @@ class DetectionPage(tk.Frame):
             log_msg(self.log, f"ERROR: {e}")
             logger.error(f"Detection error: {e}")
         finally:
-            self.running = False
+            self._set_running(False)
+            self.status_label.configure(text="Stopped.")
 
 
 # ── Retrain Page ──────────────────────────────────────────────────────────
@@ -1461,37 +1597,51 @@ class AdminPage(tk.Frame):
 
         tk.Label(self, text="Admin", font=("Segoe UI", 20, "bold"),
                  bg=BG, fg=FG).pack(anchor="w", padx=30, pady=(20, 5))
-        tk.Label(self, text="API keys and admin settings",
-                 font=("Segoe UI", 10), bg=BG, fg=FG_DIM).pack(anchor="w", padx=30, pady=(0, 15))
+        tk.Label(self, text="API keys, admin settings, and system configuration",
+                 font=("Segoe UI", 10), bg=BG, fg=FG_DIM).pack(anchor="w", padx=30, pady=(0, 10))
 
-        # ── Roboflow API Key ──
-        sec1 = tk.LabelFrame(self, text="  Roboflow API  ",
+        # ── Roboflow API ──
+        sec1 = tk.LabelFrame(self, text="  Roboflow API Configuration  ",
                               font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=ACCENT,
                               bd=1, relief="groove", padx=15, pady=10)
         sec1.pack(fill="x", padx=30, pady=5)
 
+        # API Key row
         row1 = tk.Frame(sec1, bg=BG_CARD)
         row1.pack(fill="x", pady=3)
-        tk.Label(row1, text="API Key:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG).pack(side="left")
+        tk.Label(row1, text="API Key:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG, width=12, anchor="w").pack(side="left")
         self.api_key_var = tk.StringVar()
         self.api_entry = tk.Entry(row1, textvariable=self.api_key_var, font=("Segoe UI", 10),
                                    bg=DARK_RED, fg=FG, insertbackground=FG, width=40, show="*")
-        self.api_entry.pack(side="left", padx=10, fill="x", expand=True)
+        self.api_entry.pack(side="left", padx=5, fill="x", expand=True)
         self.show_key = tk.BooleanVar(value=False)
         tk.Checkbutton(row1, text="Show", variable=self.show_key, bg=BG_CARD, fg=FG,
                         selectcolor=DARK_RED, activebackground=BG_CARD,
-                        command=self._toggle_key_visibility).pack(side="left")
+                        command=self._toggle_key_visibility).pack(side="left", padx=5)
 
+        # Workspace row
         row2 = tk.Frame(sec1, bg=BG_CARD)
         row2.pack(fill="x", pady=3)
-        tk.Label(row2, text="Workspace:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG).pack(side="left")
+        tk.Label(row2, text="Workspace:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG, width=12, anchor="w").pack(side="left")
         self.workspace_var = tk.StringVar()
         tk.Entry(row2, textvariable=self.workspace_var, font=("Segoe UI", 10),
-                 bg=DARK_RED, fg=FG, insertbackground=FG, width=30).pack(side="left", padx=10)
+                 bg=DARK_RED, fg=FG, insertbackground=FG, width=30).pack(side="left", padx=5)
+        tk.Label(row2, text="(your Roboflow workspace ID)", font=("Segoe UI", 8),
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left", padx=5)
 
-        tk.Button(sec1, text="Save API Settings", font=("Segoe UI", 10, "bold"),
+        # Buttons row
+        btn_row_rf = tk.Frame(sec1, bg=BG_CARD)
+        btn_row_rf.pack(fill="x", pady=8)
+        tk.Button(btn_row_rf, text="Save Settings", font=("Segoe UI", 10, "bold"),
                   bg=GREEN, fg="#fff", bd=0, padx=20, pady=8, cursor="hand2",
-                  command=self._save_api).pack(anchor="w", pady=8)
+                  command=self._save_api).pack(side="left", padx=(0, 10))
+        tk.Button(btn_row_rf, text="Test Connection", font=("Segoe UI", 10, "bold"),
+                  bg=ACCENT, fg="#fff", bd=0, padx=20, pady=8, cursor="hand2",
+                  command=self._test_roboflow).pack(side="left")
+
+        # Connection status
+        self.rf_status = tk.Label(sec1, text="", font=("Segoe UI", 9), bg=BG_CARD, fg=FG_DIM)
+        self.rf_status.pack(anchor="w")
 
         # ── Admin Password ──
         sec2 = tk.LabelFrame(self, text="  Admin Password  ",
@@ -1499,52 +1649,81 @@ class AdminPage(tk.Frame):
                               bd=1, relief="groove", padx=15, pady=10)
         sec2.pack(fill="x", padx=30, pady=5)
 
-        row3 = tk.Frame(sec2, bg=BG_CARD)
-        row3.pack(fill="x", pady=3)
-        tk.Label(row3, text="Current Password:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG).pack(side="left")
+        pwd_grid = tk.Frame(sec2, bg=BG_CARD)
+        pwd_grid.pack(fill="x", pady=3)
+
+        tk.Label(pwd_grid, text="Current:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG, width=10, anchor="w").grid(row=0, column=0, sticky="w", pady=2)
         self.old_pwd_var = tk.StringVar()
-        tk.Entry(row3, textvariable=self.old_pwd_var, font=("Segoe UI", 10),
-                 bg=DARK_RED, fg=FG, insertbackground=FG, width=20, show="*").pack(side="left", padx=10)
+        tk.Entry(pwd_grid, textvariable=self.old_pwd_var, font=("Segoe UI", 10),
+                 bg=DARK_RED, fg=FG, insertbackground=FG, width=25, show="*").grid(row=0, column=1, padx=5, pady=2)
 
-        row4 = tk.Frame(sec2, bg=BG_CARD)
-        row4.pack(fill="x", pady=3)
-        tk.Label(row4, text="New Password:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG).pack(side="left")
+        tk.Label(pwd_grid, text="New:", font=("Segoe UI", 10), bg=BG_CARD, fg=FG, width=10, anchor="w").grid(row=1, column=0, sticky="w", pady=2)
         self.new_pwd_var = tk.StringVar()
-        tk.Entry(row4, textvariable=self.new_pwd_var, font=("Segoe UI", 10),
-                 bg=DARK_RED, fg=FG, insertbackground=FG, width=20, show="*").pack(side="left", padx=10)
+        tk.Entry(pwd_grid, textvariable=self.new_pwd_var, font=("Segoe UI", 10),
+                 bg=DARK_RED, fg=FG, insertbackground=FG, width=25, show="*").grid(row=1, column=1, padx=5, pady=2)
 
-        tk.Button(sec2, text="Change Password", font=("Segoe UI", 10, "bold"),
-                  bg=ORANGE, fg="#fff", bd=0, padx=20, pady=8, cursor="hand2",
-                  command=self._change_password).pack(anchor="w", pady=8)
+        tk.Button(pwd_grid, text="Change", font=("Segoe UI", 9, "bold"),
+                  bg=ORANGE, fg="#fff", bd=0, padx=15, pady=5, cursor="hand2",
+                  command=self._change_password).grid(row=0, column=2, rowspan=2, padx=10)
+
+        self.pwd_status = tk.Label(sec2, text="Default password: admin123", font=("Segoe UI", 8),
+                                    bg=BG_CARD, fg=FG_DIM)
+        self.pwd_status.pack(anchor="w", pady=(3, 0))
+
+        # ── System Info ──
+        sec_info = tk.LabelFrame(self, text="  System Info  ",
+                                  font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=ACCENT,
+                                  bd=1, relief="groove", padx=15, pady=8)
+        sec_info.pack(fill="x", padx=30, pady=5)
+        self.sys_info_label = tk.Label(sec_info, text="", font=("Consolas", 9),
+                                        bg=BG_CARD, fg=FG, justify="left", anchor="w")
+        self.sys_info_label.pack(fill="x")
 
         # ── System Logs ──
         sec3 = tk.LabelFrame(self, text="  System Logs  ",
                               font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=ACCENT,
-                              bd=1, relief="groove", padx=15, pady=10)
+                              bd=1, relief="groove", padx=15, pady=8)
         sec3.pack(fill="both", expand=True, padx=30, pady=5)
 
         btn_row = tk.Frame(sec3, bg=BG_CARD)
         btn_row.pack(fill="x", pady=3)
-        tk.Button(btn_row, text="View Today's Log", font=("Segoe UI", 9),
+        tk.Button(btn_row, text="View Log", font=("Segoe UI", 9),
                   bg=ACCENT, fg="#fff", bd=0, padx=12, cursor="hand2",
                   command=self._view_log).pack(side="left", padx=5)
-        tk.Button(btn_row, text="Clear Log Display", font=("Segoe UI", 9),
+        tk.Button(btn_row, text="Clear", font=("Segoe UI", 9),
                   bg=FG_DIM, fg="#fff", bd=0, padx=12, cursor="hand2",
                   command=self._clear_log_display).pack(side="left", padx=5)
+        tk.Label(btn_row, text=f"Log: {LOG_FILE.name}", font=("Segoe UI", 8),
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left", padx=10)
 
         self.log_display = tk.Text(sec3, font=("Consolas", 8), bg="#0d0d0d", fg="#aaa",
-                                    insertbackground=FG, height=10, state="disabled",
+                                    insertbackground=FG, height=8, state="disabled",
                                     relief="flat", padx=8, pady=8)
-        self.log_display.pack(fill="both", expand=True, pady=5)
+        self.log_display.pack(fill="both", expand=True, pady=3)
 
         # Status
         self.status_label = tk.Label(self, text="", font=("Segoe UI", 10), bg=BG, fg=GREEN)
-        self.status_label.pack(anchor="w", padx=30, pady=(5, 15))
+        self.status_label.pack(anchor="w", padx=30, pady=(3, 10))
 
     def on_show(self):
         cfg = load_admin_config()
         self.api_key_var.set(cfg.get("roboflow_api_key", ""))
         self.workspace_var.set(cfg.get("roboflow_workspace", ""))
+
+        # System info
+        try:
+            from config import DEVICE, DEVICE_NAME, DEVICE_VRAM_GB, EXPORT_DIR, DATASET_DIR, CROPS_DIR
+            import torch
+            info_lines = [
+                f"PyTorch: {torch.__version__}  |  CUDA: {torch.version.cuda or 'N/A'}",
+                f"Device: {DEVICE_NAME} ({DEVICE_VRAM_GB} GB VRAM)" if DEVICE != "cpu" else "Device: CPU",
+                f"Models dir: {EXPORT_DIR}",
+                f"Dataset dir: {DATASET_DIR}",
+                f"Crops dir: {CROPS_DIR}",
+            ]
+            self.sys_info_label.configure(text="\n".join(info_lines))
+        except Exception as e:
+            self.sys_info_label.configure(text=f"Error loading system info: {e}")
 
     def _toggle_key_visibility(self):
         self.api_entry.configure(show="" if self.show_key.get() else "*")
@@ -1555,7 +1734,36 @@ class AdminPage(tk.Frame):
         cfg["roboflow_workspace"] = self.workspace_var.get().strip()
         save_admin_config(cfg)
         self.status_label.configure(text="API settings saved!", fg=GREEN)
+        self.rf_status.configure(text="Settings saved. Use 'Test Connection' to verify.", fg=YELLOW)
         logger.info("Admin: API settings updated")
+
+    def _test_roboflow(self):
+        api_key = self.api_key_var.get().strip()
+        workspace = self.workspace_var.get().strip()
+
+        if not api_key:
+            self.rf_status.configure(text="No API key entered.", fg=RED)
+            return
+
+        self.rf_status.configure(text="Testing connection...", fg=YELLOW)
+        self.update_idletasks()
+
+        def run():
+            try:
+                from roboflow import Roboflow
+                rf = Roboflow(api_key=api_key)
+                ws = rf.workspace(workspace) if workspace else rf.workspace()
+                self.rf_status.configure(
+                    text=f"Connected! Workspace: {workspace or 'default'}", fg=GREEN)
+                logger.info(f"Roboflow connection test: OK ({workspace})")
+            except ImportError:
+                self.rf_status.configure(
+                    text="roboflow package not installed. Run: pip install roboflow", fg=RED)
+            except Exception as e:
+                self.rf_status.configure(text=f"Connection failed: {e}", fg=RED)
+                logger.error(f"Roboflow test failed: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _change_password(self):
         old = self.old_pwd_var.get()
@@ -1563,17 +1771,17 @@ class AdminPage(tk.Frame):
         cfg = load_admin_config()
 
         if old != cfg.get("password", "admin123"):
-            messagebox.showerror("Wrong Password", "Current password is incorrect.")
+            self.pwd_status.configure(text="Wrong current password!", fg=RED)
             return
         if len(new) < 4:
-            messagebox.showwarning("Weak Password", "Password must be at least 4 characters.")
+            self.pwd_status.configure(text="Password must be 4+ characters.", fg=RED)
             return
 
         cfg["password"] = new
         save_admin_config(cfg)
         self.old_pwd_var.set("")
         self.new_pwd_var.set("")
-        self.status_label.configure(text="Password changed!", fg=GREEN)
+        self.pwd_status.configure(text="Password changed successfully!", fg=GREEN)
         logger.info("Admin: password changed")
 
     def _view_log(self):

@@ -38,7 +38,8 @@ import torch as _torch
 if _torch.cuda.is_available():
     DEVICE        = "cuda"
     DEVICE_NAME   = _torch.cuda.get_device_name(0)
-    DEVICE_VRAM_GB = round(_torch.cuda.get_device_properties(0).total_memory / (1024**3), 1)
+    _props = _torch.cuda.get_device_properties(0)
+    DEVICE_VRAM_GB = round(getattr(_props, "total_memory", getattr(_props, "total_mem", 0)) / (1024**3), 1)
 else:
     DEVICE        = "cpu"
     DEVICE_NAME   = "CPU"

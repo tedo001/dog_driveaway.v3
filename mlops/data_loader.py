@@ -42,7 +42,7 @@ def detect_format(src_dir):
       - lbl_dir: path to labels directory
     """
     src = Path(src_dir)
-    result = {"format": "unknown", "data_yaml": None, "classes": [], "img_dir": None, "lbl_dir": None, "all_splits": []}
+    result = {"format": "unknown", "data_yaml": None, "classes": [], "img_dir": None, "lbl_dir": None, "all_splits": [], "imagefolder_dir": None}
 
     # Check for coco128.yaml (Roboflow / YOLO format)
     yaml_path = None
@@ -63,7 +63,28 @@ def detect_format(src_dir):
         else:
             result["format"] = "yolo"
 
-    # Find image/label directories
+    # Check for ImageFolder format (train/CLASS_NAME/*.jpg)
+    # This is common for CNN behavior datasets
+    for train_candidate in [src / "train", src / "data" / "train", src]:
+        if train_candidate.exists() and train_candidate.is_dir():
+            subdirs = [d for d in train_candidate.iterdir() if d.is_dir()
+                       and d.name.lower() not in ("images", "labels", "image", "label", "img", "lbl")]
+            if subdirs:
+                # Check if subdirs contain images (ImageFolder style)
+                has_images = False
+                cls_names = []
+                for sd in subdirs:
+                    imgs = list(sd.glob("*.jpg")) + list(sd.glob("*.jpeg")) + list(sd.glob("*.png"))
+                    if imgs:
+                        has_images = True
+                        cls_names.append(sd.name)
+                if has_images and cls_names:
+                    result["format"] = "imagefolder"
+                    result["imagefolder_dir"] = str(src)
+                    result["classes"] = sorted(cls_names)
+                    break
+
+    # Find image/label directories (YOLO format)
     for img_name in ["images", "image", "img"]:
         for sub in [src / "train" / img_name, src / img_name]:
             if sub.exists():
@@ -284,6 +305,7 @@ def load_dataset_from_path(src_path, purpose="detection"):
         "img_dir": str(fmt["img_dir"]) if fmt["img_dir"] else None,
         "lbl_dir": str(fmt["lbl_dir"]) if fmt["lbl_dir"] else None,
         "data_yaml": str(fmt["data_yaml"]) if fmt["data_yaml"] else None,
+        "imagefolder_dir": str(fmt["imagefolder_dir"]) if fmt.get("imagefolder_dir") else None,
         "all_splits": [{"split": s["split"], "img_dir": str(s["img_dir"]), "lbl_dir": str(s["lbl_dir"])} for s in fmt.get("all_splits", [])],
     }
 
@@ -482,25 +504,17 @@ def copy_for_detection(src_info, clear_old=True):
 
 # ── CNN Data Loader ────────────────────────────────────────────────────────
 
-from torchvision.datasets import ImageFolder
-from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
-
-
 def load_cnn_data(batch_size=32):
     """
     CNN data loader using BOTH train and val folders from CROPS_DIR.
-
-    FIX: uses is_valid_file with suffix.lower() so .JPG/.PNG files are
-    recognized by torchvision regardless of extension case.
-    Raises RuntimeError with a clear message if DANGER or IDLE is missing.
+    Uses is_valid_file with suffix.lower() so .JPG/.PNG files are recognized.
     """
+    from torchvision.datasets import ImageFolder
+    from torch.utils.data import DataLoader
+    import torchvision.transforms as transforms
+
     train_dir = CROPS_DIR / "train"
     val_dir   = CROPS_DIR / "val"
-
-    print("\n[DEBUG] load_cnn_data()")
-    print(f"[DEBUG] train_dir = {train_dir}  (exists={train_dir.exists()})")
-    print(f"[DEBUG] val_dir   = {val_dir}  (exists={val_dir.exists()})")
 
     if not train_dir.exists() or not val_dir.exists():
         raise RuntimeError(
@@ -513,7 +527,6 @@ def load_cnn_data(batch_size=32):
         transforms.ToTensor(),
     ])
 
-    # Case-insensitive extension check — the core fix
     _valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
     def _is_valid_file(path: str) -> bool:
@@ -524,31 +537,108 @@ def load_cnn_data(batch_size=32):
     val_dataset   = ImageFolder(root=str(val_dir),   transform=transform,
                                 is_valid_file=_is_valid_file)
 
-    print(f"\n[DEBUG] Train classes : {train_dataset.classes}")
-    print(f"[DEBUG] Val   classes : {val_dataset.classes}")
-    print(f"[DEBUG] Train samples : {len(train_dataset)}")
-    print(f"[DEBUG] Val   samples : {len(val_dataset)}")
-
-    for cls_name, cls_idx in train_dataset.class_to_idx.items():
-        n_train = sum(1 for _, lbl in train_dataset.samples if lbl == cls_idx)
-        n_val   = sum(1 for _, lbl in val_dataset.samples   if lbl == cls_idx)
-        print(f"[DEBUG]   {cls_name:10s} → train={n_train:5d}, val={n_val:5d}")
-
-    if "IDLE" not in train_dataset.classes:
-        raise RuntimeError(
-            f"IDLE class missing from train dataset. "
-            f"Found classes: {train_dataset.classes}. "
-            f"Check folder: {train_dir / 'IDLE'}"
-        )
-    if "DANGER" not in train_dataset.classes:
-        raise RuntimeError(
-            f"DANGER class missing from train dataset. "
-            f"Found classes: {train_dataset.classes}. "
-            f"Check folder: {train_dir / 'DANGER'}"
-        )
+    print(f"[CNN] Train classes: {train_dataset.classes} ({len(train_dataset)} samples)")
+    print(f"[CNN] Val classes: {val_dataset.classes} ({len(val_dataset)} samples)")
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
 
-    print("\n[DEBUG] ✅ CNN dataset loaded successfully\n")
     return train_loader, val_loader
+
+
+# ── Copy ImageFolder dataset to CROPS_DIR for CNN training ────────────────
+
+def copy_imagefolder_to_crops(src_path, class_mapping=None, clear_old=True, train_split=0.8):
+    """
+    Copy an ImageFolder-style dataset directly to CROPS_DIR for CNN training.
+
+    Handles structures like:
+      src/train/CLASS_A/*.jpg  +  src/valid/CLASS_A/*.jpg
+      src/train/CLASS_A/*.jpg  (no valid split)
+      src/CLASS_A/*.jpg  (flat, no train/valid split)
+
+    Args:
+        src_path: root directory containing class folders or train/valid splits
+        class_mapping: optional dict to remap class names (e.g. {"angry": "DANGER"})
+        clear_old: clear existing crops first
+        train_split: train/val split ratio if no existing split
+    """
+    src = Path(src_path)
+
+    if clear_old and CROPS_DIR.exists():
+        import shutil
+        shutil.rmtree(CROPS_DIR)
+
+    # Detect structure: split-based or flat
+    has_train = (src / "train").exists()
+    has_valid = (src / "valid").exists() or (src / "val").exists()
+    has_data_train = (src / "data" / "train").exists()
+
+    splits_found = {}
+    if has_train:
+        splits_found["train"] = src / "train"
+        if has_valid:
+            val_dir = src / "valid" if (src / "valid").exists() else src / "val"
+            splits_found["val"] = val_dir
+    elif has_data_train:
+        splits_found["train"] = src / "data" / "train"
+        for vname in ["valid", "val"]:
+            if (src / "data" / vname).exists():
+                splits_found["val"] = src / "data" / vname
+                break
+    else:
+        # Flat: class folders directly under src
+        splits_found["train"] = src
+
+    stats = {}
+    total = 0
+
+    for split_name, split_dir in splits_found.items():
+        target_split = "val" if split_name in ("valid", "val") else "train"
+        class_dirs = [d for d in split_dir.iterdir() if d.is_dir()]
+
+        for cls_dir in class_dirs:
+            src_class = cls_dir.name
+            # Apply mapping if provided
+            if class_mapping and src_class.lower() in class_mapping:
+                dst_class = class_mapping[src_class.lower()]
+            elif class_mapping and src_class in class_mapping:
+                dst_class = class_mapping[src_class]
+            else:
+                dst_class = src_class
+
+            dst_dir = CROPS_DIR / target_split / dst_class
+            dst_dir.mkdir(parents=True, exist_ok=True)
+
+            imgs = list(cls_dir.glob("*.jpg")) + list(cls_dir.glob("*.jpeg")) + list(cls_dir.glob("*.png"))
+            for img in imgs:
+                import shutil
+                shutil.copy2(img, dst_dir / img.name)
+                total += 1
+
+            key = f"{target_split}/{dst_class}"
+            stats[key] = stats.get(key, 0) + len(imgs)
+
+    # If no val split exists, split train 80/20
+    if "val" not in splits_found and (CROPS_DIR / "train").exists():
+        train_root = CROPS_DIR / "train"
+        for cls_dir in train_root.iterdir():
+            if not cls_dir.is_dir():
+                continue
+            imgs = list(cls_dir.glob("*.*"))
+            random.seed(42)
+            random.shuffle(imgs)
+            val_count = int(len(imgs) * (1 - train_split))
+            val_imgs = imgs[:val_count]
+
+            val_dst = CROPS_DIR / "val" / cls_dir.name
+            val_dst.mkdir(parents=True, exist_ok=True)
+            for img in val_imgs:
+                import shutil
+                shutil.move(str(img), val_dst / img.name)
+
+    print(f"  ImageFolder copy complete: {total} images")
+    for k, v in sorted(stats.items()):
+        print(f"    {k}: {v}")
+
+    return {"success": True, "total": total, "stats": stats}
